@@ -1,5 +1,7 @@
 @extends('layout')
 
+@section('bodyclass', 'db-page-longform')
+
 @section('head')
 {{-- PUBLISHED 2026-08-11, after the top-20 review was completed and accepted by
      the owner. This page was `noindex` + absent from the nav for as long as every
