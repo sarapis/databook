@@ -696,6 +696,57 @@ tr.shown td.details-control {
   margin-left: 5px;
 }
 
+/* Floating "back to top" button, scoped to long-form pages that opt in with
+   @section('bodyclass', 'db-page-longform') (currently the Digital Services
+   Analysis pages). The rules above put #return-to-top in normal document flow
+   site-wide — harmless, since scrollFunction() only ever reveals it once a
+   reader has scrolled past the footer. This override turns it into an
+   always-reachable fixed circular button instead, only where a page asks for it.
+   The fade relies on @starting-style + allow-discrete (baseline-widely-available
+   since 2024) so it animates in supporting browsers and simply pops in — same
+   as before this change — everywhere else, no JS involved either way. */
+body.db-page-longform #return-to-top {
+  position: fixed;
+  right: var(--db-space-3);
+  bottom: var(--db-space-3);
+  padding: 0 !important;
+  z-index: 1030;
+  opacity: 1;
+  transition: opacity .3s ease, display .3s ease allow-discrete;
+}
+@starting-style {
+  body.db-page-longform #return-to-top {
+    opacity: 0;
+  }
+}
+body.db-page-longform #return-to-top a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: var(--db-accent);
+  color: #ffffff;
+  border-radius: 50%;
+  box-shadow: var(--db-shadow-lg);
+  transition: background var(--db-transition), transform var(--db-transition);
+}
+/* Icon-only visually, but the label stays for screen readers (the <a> also
+   carries aria-label="Return to top" in the shared markup). */
+body.db-page-longform #return-to-top a span {
+  position: absolute;
+  width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+body.db-page-longform #return-to-top a:hover {
+  background: var(--db-link);
+  transform: translateY(-2px);
+}
+body.db-page-longform #return-to-top a i {
+  font-size: 20px;
+  margin: 0;
+}
+
 #footer-menu {
   width: 100%;
   margin: 0;

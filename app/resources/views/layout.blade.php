@@ -63,7 +63,7 @@
 	
 </head>
 
-<body>
+<body class="@yield('bodyclass')">
 	<!-- Nonprofit Disclaimer Bar -->
 	<div id="disclaimer-bar" class="db-disclaimer">
 		<span>This website is a nonprofit project of <a href="https://wegov.nyc" target="_blank" rel="noopener">WeGov.NYC</a> and not affiliated with NYC government.</span>
@@ -139,7 +139,7 @@
 		</footer>
 
 		<div id="return-to-top" style="display:none;">
-			<a href="#" onclick="topFunction()"><span>Return to top</span> <i class="bi bi-arrow-up-circle-fill"></i></a>
+			<a href="#" onclick="topFunction()" aria-label="Return to top"><span>Return to top</span> <i class="bi bi-arrow-up"></i></a>
 		</div>
 		@yield('scripts')
 

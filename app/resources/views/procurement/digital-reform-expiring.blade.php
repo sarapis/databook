@@ -1,5 +1,7 @@
 @extends('layout')
 
+@section('bodyclass', 'db-page-longform')
+
 @section('head')
 <style>
     /* Expiring Digital Service Contracts (Renewal Review Queue) - page glue. */

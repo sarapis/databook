@@ -1,5 +1,7 @@
 @extends('layout')
 
+@section('bodyclass', 'db-page-longform')
+
 @section('head')
 {{-- Published with the rest of the license analysis 2026-08-11. ⚠ This page was
      nearly LEFT BEHIND on noindex while its parents were published — and family

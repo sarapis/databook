@@ -1,5 +1,7 @@
 @extends('layout')
 
+@section('bodyclass', 'db-page-longform')
+
 @section('head')
 <style>
     /* Digital Services Analysis: Overview - page glue over the db-* design system. */

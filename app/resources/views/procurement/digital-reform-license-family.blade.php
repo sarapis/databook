@@ -1,5 +1,7 @@
 @extends('layout')
 
+@section('bodyclass', 'db-page-longform')
+
 @section('head')
 {{-- Published with its parent page 2026-08-11. ⚠ A family page is only as reviewed
      as the family it describes: the curated families were reviewed, the tail was
