@@ -1,0 +1,92 @@
+# frontend page-family baseline — see scripts/frontend-smoke.sh
+#
+# Captured on the CI ephemeral stack (empty Postgres) at 26d149b, the first
+# run in which the frontend rendered at all — before the app/.env fix in that
+# commit every one of these 68 returned 500.
+#
+# Not a statement that these are CORRECT. It records what each page family
+# does on an empty database so that a change which moves any of them fails.
+# The 3 x 500 and 1 x 404 below are data-dependent on this empty stack and
+# are recorded as-is, deliberately, rather than chased.
+#
+# ⚠ UPDATED 2026-09-16 for an INTENDED change, which is the only reason a row
+# here may move: /research/digital-reform/master-agreements was renamed to
+# /agreements (owner decision) and the old path now 302s, exactly as /expiring
+# and /licenses already do. Both rows are listed, so the redirect itself is
+# covered and a future change that turns it into a 404 fails here.
+# status	url
+200	/
+200	/about
+200	/about/data
+500	/about/log
+200	/about/tables
+200	/auctions
+302	/capital
+301	/capital-archive
+301	/capital-archive/commitments
+301	/capital-archive/projects
+302	/capital/commitments
+200	/capital/minor-projects
+302	/capital/projects
+200	/council
+200	/districts
+200	/jobs
+200	/jobs-dashboard
+200	/jobs-exams
+200	/mcp
+200	/new-home
+200	/notices
+500	/notices/events.ics
+500	/notices/news.rss
+302	/organizations
+200	/organizations/agencies
+200	/organizations/all
+200	/organizations/chart
+302	/organizations/directory
+200	/people
+200	/procurement
+200	/procurement/agencies
+200	/procurement/budget
+200	/procurement/contracts
+200	/procurement/data-sources
+302	/procurement/nycha
+302	/procurement/nycha/budget
+302	/procurement/nycha/contracts
+302	/procurement/nycha/revenue
+302	/procurement/nycha/spending
+200	/procurement/payroll
+200	/procurement/revenue
+200	/procurement/solicitations
+200	/procurement/transactions
+200	/procurement/transactions/search
+200	/procurement/vendors
+200	/projects
+200	/projects/about
+200	/projects/budget-lines
+302	/projects/capital
+200	/projects/categories
+200	/projects/commitments
+200	/projects/types
+200	/research/digital-reform
+200	/research/digital-reform/agreements
+200	/research/digital-reform/call-centers
+200	/research/digital-reform/contracts
+200	/research/digital-reform/contracts/review
+200	/research/digital-reform/contracts/review/export
+200	/research/digital-reform/data
+302	/research/digital-reform/expiring
+302	/research/digital-reform/licenses
+302	/research/digital-reform/master-agreements
+200	/research/digital-reform/products
+200	/research/digital-reform/products/open-source
+200	/research/digital-reform/search
+200	/research/digital-reform/vendors
+200	/schools
+200	/schoolsXHR/geojson
+200	/search
+200	/search/suggest
+200	/styleguide
+200	/styleguide/components
+404	/title-stats
+200	/titles
+301	/titles-overview

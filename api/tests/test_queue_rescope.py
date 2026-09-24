@@ -223,7 +223,7 @@ def _flags(**kw):
     row = {"procurement_method": "Competitive Sealed Bid", "award_amount": 5000,
            "contract_title": kw.pop("title", "")}
     return {f["key"]: f for f in _review_flags(
-        row, 900, True, None, None, None, None,
+        row, 900, None, None, None, None,
         kw.pop("enrich", None), kw.pop("purchase_class", None))}
 
 
@@ -315,7 +315,7 @@ def test_the_queue_resolves_class_through_licenseclass_at_product_grain():
 def test_the_view_hides_the_replaceability_rating_outside_software_licence():
     """The API withdrawing the flag is half of it; the dossier still rendering
     "High replaceability" would contradict the withdrawn flag on the same row."""
-    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-expiring.blade.php')
+    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-review.blade.php')
     src = open(view, encoding='utf-8').read()
     assert re.search(r"\$showBvb\s*=.*software-licence", src, re.S), \
         "the view no longer gates the build-vs-buy block on the purchase class"
@@ -371,7 +371,7 @@ def test_the_payload_states_its_scope_and_the_page_reads_it_from_there():
     assert '"scope"' in body and 'qsc.mode' in body, \
         "the queue payload no longer reports which scope produced it"
 
-    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-expiring.blade.php')
+    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-review.blade.php')
     src = open(view, encoding='utf-8').read()
     assert "$expiring['scope']" in src, "the view no longer reads the scope from the payload"
     assert '$expPositiveScope' in src, "the scope-dependent copy is gone"
@@ -383,7 +383,7 @@ def test_the_retired_nontech_disclosure_is_replaced_not_deleted():
     honesty device silently is not the same as retiring it: the page must state that
     nothing is filtered out, and must still SHOUT if the measured number is ever
     non-zero on the positive scope, because that would mean the scope is broken."""
-    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-expiring.blade.php')
+    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-review.blade.php')
     src = open(view, encoding='utf-8').read()
     assert 'Nothing is filtered out of this queue' in src, \
         "the replacement scope statement is gone — the disclosure was dropped, not retired"
@@ -408,8 +408,9 @@ def test_licence_rows_link_to_their_family_page():
     assert 'slug, is_generic FROM license_family' in code, \
         "the family lookup no longer selects the slug (and the generic flag)"
 
-    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-expiring.blade.php')
+    view = os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-review.blade.php')
     src = open(view, encoding='utf-8').read()
-    assert "research.digital-reform.license-family" in src, \
+    # route renamed .license-family -> .product-family in the 2026-08-21 reorg
+    assert "research.digital-reform.product-family" in src, \
         "licence rows no longer link to their family page"
     assert "license_family_slug" in src, "the link is built from something other than the slug"

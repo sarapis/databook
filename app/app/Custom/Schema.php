@@ -59,24 +59,14 @@ class Schema
 	}
 
 
-	static function project_a($dd, $org, $context=true)
-	{
-		return ($context ? ['@context' => 'https://schema.org'] : []) + [
-			'@type' => 'Project',
-			'name' => $dd['PROJECT_DESCR'],
-			'description' => preg_replace('~[\r\n]+~si', '; ', "{$dd['PROJECT_ID']} - {$dd['SCOPE_TEXT']}"),
-			'areaServed' => self::place(['lat' => $dd['LAT'], 'lng' => $dd['LNG'], 'name' => $dd['PROJECT_ID']]),
-			'memberOf' => self::org($org, false),
-			'url' => route('project', ['prjId' => $dd['PROJECT_ID'], 'prjslug' => Str::slug($dd['PROJECT_DESCR'], '-')]),
-		];
-	}
-
-
 	static function districtFromFile($type, $id, $org=null)
 	{
 		$type = strtolower($type);
 		$fn = public_path('data/'. ['cc' => 'cc', 'cd' => 'cd', 'nta' => 'nta', 'sd' => 'sd'][$type] . '.geojson');
-		$title = ['cc' => 'City Council District ', 'cd' => 'Community District ', 'nta' => '', 'sd' => 'School District '][$type];
+		// ⚠ ONE OWNER — this map used to be typed here, in Organizations::sitemap()
+		// and in districts.blade.php's JS, and the three disagreed (the sitemap's
+		// had no `sd`). See App\Custom\DistrictName.
+		$title = DistrictName::PREFIX[$type];
 		$geojson = json_decode(file_get_contents($fn), true);
 		$f = $type == 'nta' ? 'nameAlt' : 'nameCol';
 		foreach ($geojson['features'] as $d)
@@ -113,7 +103,11 @@ class Schema
 				'@type' => 'GeoShape',
 				'polygon' => $dd['geo'],
 			],
-			'url' => route('districtsPreset', ['type' => $dd['type'], 'id' => $dd['id'], 'dslug' => Str::slug($dd['name'], '-'), 'section' => 'projects']),
+			// ⚠ Landing section from DistDatasets, never a literal: an sd page's
+			// canonical url used to name 'projects', a section sd does not have,
+			// so every school-district page that rendered pointed its own
+			// canonical at a 404.
+			'url' => route('districtsPreset', ['type' => $dd['type'], 'id' => $dd['id'], 'dslug' => Str::slug($dd['name'], '-'), 'section' => (new DistDatasets())->defaultSection($dd['type'])]),
 		] + ($org ? ['memberOf' => self::org($org, false)] : []);
 	}
 

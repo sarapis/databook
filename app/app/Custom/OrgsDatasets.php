@@ -41,51 +41,57 @@ class OrgsDatasets
 			],
 			'script' => "$('#filter-1').val($('#filter-1 option:last-child').val()).change(); $('#filter-2').val($('#filter-2 option:last-child').val()).change();",
 		],
-		'projects' => [						#capitalprojects
+		'projects' => [						#capital_projects (the spine)
+			// ⚠⚠ REPOINTED OFF `capitalprojectsdollarscomp`, THE SERIES NYC RETIRED
+			// 2023-10-26 — the LAST capital surface still reading it. The old
+			// contract's every money cell multiplied by 1000 because that series is
+			// denominated in THOUSANDS; the spine is USD, so carrying those
+			// multipliers over would render $652.6M as $652.6B. Invariant 2, and the
+			// reason this is a separate contract rather than an edited table name.
+			// ⚠ MEASURED BEFORE SHIPPING: the spine resolves 27 distinct orgs against
+			// the retired series' 25 — a net gain of two — and loses exactly one,
+			// Metropolitan Transportation Authority (170020045, 14 rows). The MTA is a
+			// State authority, so its absence from a CITY capital spine is arguably
+			// correct; it is a tab that disappears, so it is recorded rather than
+			// discovered.
+			'name' => 'Capital Projects',
 			'fullname' => 'Capital Project Detail Data - Dollars',
-			'table' => 'capitalprojectsdollarscomp',
-			'description' => 'This dataset contains capital commitment plan data by project type, budget line and source of funds. The dollar values are in thousands. The dataset is updated three times a year during the Preliminary, Executive and Adopted Capital Commitment Plans.',
-			'hdrs' => ['Publication Date', 'Project ID', 'Name', 'Scope', 'Category', 'Borough', 'Current Budget', 'Budget Change (%)', 'Timeline Change'],
-			'visible' => [false, true, true, true, true, true, true, true, true],
-			'hide_on_map_open' => '0, 5, 6, 7, 8',		// +1 for details fld is already added
+			'description' => 'The derived capital projects spine: every project NYC publishes in the Capital Commitment Plan, the Capital Projects Dashboard, or the retired 2023 detail series, resolved to one row per (agency, FMS id). Databook links 12,456 of 17,024 tracked projects to an organisation.',
+			'table' => 'capital_projects',
+			// ⚠ NO AGENCY COLUMN. The citywide spine contract carries one; on an
+			// organisation's own tab every row would repeat that organisation's name.
+			'hdrs' => ['Project ID', 'Name', 'Asset category', 'Borough', 'Phase', 'Planned commitments', 'Spent', 'In current plan'],
+			'visible' => [true, true, true, true, true, true, true, true],
+			// ⚠ Column indices, so this moves with `hdrs`. +1 is added for the details
+			// expander by `get()`; this contract declares no `details`, so there is none.
+			'hide_on_map_open' => '2, 3, 6, 7',
 			'flds' => [
-				'function (r) { return toDashDate(r["PUB_DATE"]) }',
-				'function (r) { return `<a href="/p/${r.PROJECT_ID}_${slug(r.PROJECT_DESCR)}">${r.PROJECT_ID}</a>` }',
-				'"PROJECT_DESCR"', '"SCOPE_TEXT"', '"TYP_CATEGORY_NAME"',
-				'"BORO"',
-				'function (r) { return `<span data-content="${toFin(r["BUDG_CURR"], 1000)}">${toFinShortK(r["BUDG_CURR"], 1000)}</span>` }',
-				'function (r) { return `<span class="${r["BUDG_ORIG"] >= r["BUDG_CURR"] ? "good" : "bad "}">${toPerc(r["BUDG_ORIG"], r["BUDG_CURR"])}</span>` }',
-				'function (r) { 
-						if ((r["END_DIFF"] == "-") || (r["END_DIFF"] == "12/31/1969"))
-							return "NA"
-						var v = parseFloat(r["END_DIFF"]).toFixed(1).toString()
-						if (v < 0)
-							return `<span class="bad">${-v} years late</span>`
-						return v > 0 ? `<span class="good">${v} years early</span>` : `<span class="good">on time</span>`;
-					}'
-			],
-			'filters' => [4 => null],
-			'details' => [
-				'Planned Cost' => '`<span data-content="${toFin(r["BUDG_ORIG"], 1000)}">${toFinShortK(r["BUDG_ORIG"], 1000)}</span>`',
-				'Budget Increase' => '(!r["ORIG_BUD_AMT"] 
-							? "NA" 
-							: (r["BUDG_DIFF"] == 0 
-								? "0" 
-								: (r["BUDG_DIFF"] > 0 
-									? "-" 
-									: `${toFinShortK(-r["BUDG_DIFF"], 1000)}`
-								)
-							)
-					)',
-				'Original Budget' => '`<span data-content="${toFin(r["BUDG_ORIG"], 1000)}">${toFinShortK(r["BUDG_ORIG"], 1000)}</span>`',
-				'Prior Spending' =>  '`<span data-content="${toFin(r["CITY_PRIOR_ACTUAL"], 1000)}">${toFinShortK(r["CITY_PRIOR_ACTUAL"], 1000)}</span>`',
-				'Planned Spending' => '`<span data-content="${toFin(r["CITY_PLAN_TOTAL"], 1000)}">${toFinShortK(r["CITY_PLAN_TOTAL"], 1000)}</span>`',
-				'Community Boards Served' => 'r["COMMUNITY_BOARD"]',
-				'Budget Lines' => 'r["BUDGET_LINE"]',
-				'Site Description' => 'r["SITE_DESCR"]',
-				'Explanation for Delay' => 'r["DELAY_DESC"]',
-			],
-			'order' => [[8, 'desc']],
+					// ⚠ THE CANONICAL, AGENCY-CONCATENATED ID. 1,160 bare FMS ids are
+					// carried by more than one agency across 2,371 rows, so a link built
+					// from `fms_id` alone lands on a different agency's project.
+					'function (r) { return `<a href="/p/${r.id}_${slug(r.description)}">${r.id}</a>` }',
+					// ⚠⚠ EVERY CELL RETURNS A STRING, NEVER null. 4,095 spine rows carry no
+					// description, 5,152 no borough, 5,193 no asset category — all
+					// legitimate — and a null hands DataTables something it tries to sort
+					// and search, which threw `n.slice is not a function` on the category
+					// pages while the rows still RENDERED.
+					'function (r) { return r["description"] || "" }',
+					'function (r) { return r["type_category"] || "" }',
+					'function (r) { return r["borough"] || "" }',
+					// ⚠ A blank phase means NYC publishes no schedule, not "no phase".
+					'function (r) { return r["current_phase"] || "Not published" }',
+					// ⚠ `data-content` is the SORT KEY — money columns are not monotonic in
+					// their visible text ($100K sorts above $79.8M). Multiplier 1, not 1000.
+					'function (r) { return `<span data-content="${toFin(r["planned_total_usd"], 1)}">${toFinShortK(r["planned_total_usd"], 1)}</span>` }',
+					'function (r) { return `<span data-content="${toFin(r["spent_total_usd"], 1)}">${toFinShortK(r["spent_total_usd"], 1)}</span>` }',
+					'function (r) { return r["in_current_plan"] ? "Yes" : "No" }'
+				],
+			'filters' => [2 => null, 3 => null, 4 => null],
+			// ⚠⚠ `order` IS NOT OPTIONAL — the view reads `$details['order']` inside an
+			// `@if`, and an undefined index is an ErrorException in Laravel, which the
+			// `@if` does not guard. Column 5 is Planned commitments, so the largest
+			// projects lead.
+			'order' => [[5, 'desc']],
 		],
 		'benefits-api' => [						#benefitsapi
 			'fullname' => 'Benefits and Programs API on NYC Open Data',

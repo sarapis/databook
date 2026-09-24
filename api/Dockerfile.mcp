@@ -24,23 +24,52 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # not assumed). The upper bound is the point; the lower bound just records what
 # was tested.
 #
-# ⚠ THE OTHER FIVE ARE STILL UNPINNED and carry the same latent failure — any of
-# them can ship a breaking major and this image rebuilds from PyPI every time.
-# Left alone deliberately: the current image is BROKEN, so its installed versions
-# are not a known-good set to freeze. Pinning them needs a green build to pin
-# FROM, which this change produces.
+# ⚠ ALL SIX ARE NOW PINNED (2026-08-21). The five that were left unpinned carried
+# the identical latent failure: this image rebuilds from PyPI every time, so any
+# breaking major shipped between rebuilds lands silently on the next deploy. They
+# were left alone in #271 for a good reason — the image was BROKEN then, so its
+# installed versions were not a known-good set to freeze. This pins them from the
+# set that is currently serving prod and passing `MCP Tool Audit (prod)` 40/40,
+# read out of the running container with `pip freeze`, which is the green build
+# that note was waiting for.
+#
+# ⚠ THE UPPER BOUND IS THE POINT, and it is NOT the same axis for every package.
+# For >=1.0 releases the breaking axis is the major (mcp 1.x -> 2.0 removed
+# `mcp.server.fastmcp`; that is the whole incident). For 0.x releases there is no
+# major to bound — by convention a 0.x MINOR may break — so asyncpg and uvicorn
+# are bounded on the minor instead. Bounding asyncpg at `<1` would have permitted
+# exactly the kind of jump this is meant to stop.
+#
+# Patches still flow, so security fixes are not blocked. Raising a bound is a
+# deliberate act: bump it, rebuild, and let the audit verify before merging.
 RUN pip install --no-cache-dir \
     'mcp>=1.29,<2' \
-    asyncpg \
-    starlette \
-    uvicorn \
-    aiohttp \
-    cachetools
+    'asyncpg>=0.31,<0.32' \
+    'starlette>=1.6,<2' \
+    'uvicorn>=0.52,<0.53' \
+    'aiohttp>=3.14,<4' \
+    'cachetools>=7.1,<8'
 
 # Copy MCP server files
 COPY mcp_server.py .
 COPY serve_mcp.py .
 COPY modules/ ./modules/
+# ⚠⚠ THE SEED DIRECTORY IS REQUIRED, and leaving it out is not a build error —
+# it is a SILENT WRONG ANSWER. `modules/agencyalias.py` reads
+# seed/agency_org_aliases.csv to map legacy/variant agency strings onto orgs.
+# Without it the map is empty and `search_contracts(agency="Technology and
+# Innovation")` returns 0 contracts for an agency holding $6.78B — the exact
+# defect the seed exists to fix, reintroduced by a missing COPY.
+#
+# Found on prod 2026-09-02, minutes after deploying that fix: the api image ships
+# seed/ via `COPY . .` and this image did not, so the same code behaved
+# differently in the two containers. It surfaced only because the module logs the
+# unreadable path at ERROR rather than degrading quietly.
+#
+# 304K, so the whole directory is copied rather than cherry-picked: `modules/` is
+# copied wholesale, so any module added later may read a seed. A guard in
+# api/tests/test_agency_alias.py pins this.
+COPY seed/ ./seed/
 
 # Expose MCP port
 EXPOSE 8082

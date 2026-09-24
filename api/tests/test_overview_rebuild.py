@@ -148,10 +148,16 @@ def test_the_drill_down_uses_the_same_definition_as_the_bar():
     assert 'composition = await _composition()' in src, \
         "composition must run before the gather, or the drill-down has nothing to " \
         "resolve against"
-    # And the page must say what it is filtered to.
-    view = _strip_php_comments(open(OVERVIEW, encoding='utf-8').read())
+    # The drill-down links carry the parameter — they live in the whole-book
+    # partial the Overview band and the Contracts page share...
+    book = open(os.path.join(VIEWS, 'procurement/partials/contracts-book.blade.php'),
+                encoding='utf-8').read()
+    assert "'contract_segment' => $it['slug']" in book, \
+        "the type pie no longer drills down to a segment-filtered contract list"
+    # ...and the page they LAND on must say what it is filtered to.
+    view = _strip_php_comments(open(EXPIRING, encoding='utf-8').read())
     assert '$segSel' in view and 'contract_segment' in view, \
-        "the page no longer shows a clearable chip for the segment filter"
+        "the Contracts page no longer shows a clearable chip for the segment filter"
 
 
 # --------------------------------------------- 3. the two retired figures
@@ -171,15 +177,41 @@ def test_digital_share_and_the_tagged_vendor_tile_are_gone_for_good():
     # its first run. The API check above can use raw source because `digital_share` is
     # a key name no prose needs.
     body = _strip_php_comments(open(OVERVIEW, encoding='utf-8').read())
-    assert 'Digital Share' not in body and 'digital_share' not in body, \
-        "the Digital Share column is back on the page"
-    assert 'Tagged in Database' not in body, "the tagged-vendor tile is back"
+    # ⚠ The vendor table moved to its own page in the 2026-08-21 reorg, so the
+    # retirement ban has to follow it — that is where Digital Share would
+    # reappear. Both files stay scanned.
+    vendors_view = os.path.join(ROOT,
+        'app/resources/views/procurement/digital-reform-vendors.blade.php')
+    vbody = _strip_php_comments(open(vendors_view, encoding='utf-8').read())
+    for b in (body, vbody):
+        assert 'Digital Share' not in b and 'digital_share' not in b, \
+            "the Digital Share column is back on a page"
+        assert 'Tagged in Database' not in b, "the tagged-vendor tile is back"
     assert 'Digital Service Reform' not in body, \
-        "the retired h1 is back — the page is 'Digital Services Analysis: Overview'"
-    assert 'Digital Services Analysis: Overview' in body, "the h1 is missing"
-    # The honest replacements must be present, not merely the old ones absent.
-    for want in ('Technology contracts', 'Technology value', 'not known to have ended'):
-        assert want in body, f"the rebuilt page lost '{want}'"
+        "the retired h1 is back — the page's heading is the menu word, 'Overview'"
+    # ⚠⚠ THIS USED TO ASSERT THE LITERAL "Digital Services Analysis: Overview",
+    # and it fired — correctly — when the owner asked for the section prefix to
+    # come out of every heading (2026-09-19). Re-expressed rather than relaxed,
+    # because it was carrying TWO properties and only one of them was the string:
+    #   1. the page still has an h1, and it is the menu word;
+    #   2. the reader is still told this page layers an interpretation on
+    #      official data — which the prefix was one of three carriers of
+    #      (see `_tells_the_reader_it_is_an_analysis` in test_license_families).
+    # With the prefix gone that identity rests on the banner, so the banner is
+    # now asserted HERE rather than left implicit. A page with neither still
+    # fails, which is what the old assertion really guaranteed.
+    assert re.search(r'<h1[^>]*>\s*Overview\s*</h1>', body), \
+        "the Overview's h1 is missing or is no longer the menu word"
+    assert 'analysis-banner' in body, \
+        ("the Analysis identity is gone from the Overview: the h1 no longer "
+         "carries the 'Digital Services Analysis:' prefix, so the banner is the "
+         "only thing left telling a reader this page is an interpretation")
+    # The honest replacements must be present, not merely the old ones absent —
+    # split across their post-reorg homes.
+    for want in ('Technology contracts', 'not known to have ended'):
+        assert want in body, f"the Overview lost '{want}'"
+    for want in ('Technology contracts', 'Technology value'):
+        assert want in vbody, f"the Vendors page lost '{want}'"
 
 
 def test_the_vendor_table_counts_only_confirmed_technology():
@@ -197,6 +229,32 @@ def test_the_vendor_table_counts_only_confirmed_technology():
 
 
 # ------------------------------------------------------ 4. the pipeline
+
+
+def _included_partials(src, _depth=0, skip=frozenset()):
+    """Every Blade partial the given view @includes, concatenated, one level deep.
+
+    ⚠ A guard that reads only the page's own file measures less than the page
+    publishes. The Overview's ceiling framing moved into the storyboard partial,
+    and the file-only assertion reported it gone from a page that says it three
+    times.
+    """
+    out = []
+    for name in re.findall(r"@include\(\s*['\"]([A-Za-z0-9_.\-]+)['\"]", src):
+        if name in skip:
+            continue
+        path = os.path.join(ROOT, 'app', 'resources', 'views',
+                            *name.split('.')) + '.blade.php'
+        if not os.path.exists(path):
+            continue
+        body = open(path, encoding='utf-8').read()
+        # ⚠ Comments stripped for the same reason `ov` is: these very views
+        # carry comments EXPLAINING the ceiling rule, so an unstripped scan
+        # passes on prose about the property while the property is gone.
+        out.append(_strip_php_comments(re.sub(r'\{\{--.*?--\}\}', '', body, flags=re.S)))
+        if _depth < 1:
+            out.append(_included_partials(body, _depth + 1, skip))
+    return '\n'.join(out)
 
 
 def test_the_pipeline_is_a_ceiling_and_lives_in_exactly_one_place():
@@ -227,13 +285,53 @@ def test_the_pipeline_is_a_ceiling_and_lives_in_exactly_one_place():
         "the Licenses page lost its pointer to the pipeline block"
     assert '$pipeRows' not in licview, "the Licenses page still renders pipeline rows"
 
-    # The Overview must call it a ceiling in the copy a reader sees, not just in the key.
+    # ⚠ The block's ONE home is the Agreements page since 2026-09-23 (it moved
+    # there from Contracts, where the 2026-08-21 reorg had put it). The one-home
+    # property is what this guard exists for, so it asserts the rows render on the
+    # Agreements page and NOWHERE else in the section.
+    agr_view = os.path.join(ROOT,
+        'app/resources/views/procurement/digital-reform-agreements.blade.php')
+    cv = _strip_php_comments(open(agr_view, encoding='utf-8').read())
+    assert 'id="awaiting-registration"' in cv, "the pipeline block left the Agreements page"
+    assert 'ceiling' in cv.lower() and 'not spend' in cv.lower(), \
+        "the never-add-this framing is gone from the awaiting-registration block"
+    assert "$pipe['ceiling']" in cv, "the block no longer renders the ceiling key"
+    contracts_view = os.path.join(ROOT,
+        'app/resources/views/procurement/digital-reform-expiring.blade.php')
+    ct = _strip_php_comments(open(contracts_view, encoding='utf-8').read())
+    assert "$pipe['rows']" not in ct and 'id="awaiting-registration"' not in ct, \
+        "the Contracts page renders pipeline rows again — the block has ONE home"
     ov = _strip_php_comments(open(OVERVIEW, encoding='utf-8').read())
-    assert 'ceiling' in ov.lower() and 'not spend' in ov.lower(), \
-        "the never-add-this framing is gone from the pipeline block"
-    assert "$pipe['ceiling']" in ov, "the block no longer renders the ceiling key"
+    assert "$pipe['ceiling']" not in ov and "$pipe['rows']" not in ov, \
+        "the Overview renders pipeline rows again — the block has ONE home"
+    # ⚠⚠ A PHRASE MOVED AND THE PROPERTY GOT STRONGER — re-expressed 2026-09-12.
+    # This asserted the literal 'ceilings, not spend' and fired when the storyboard
+    # restructured the Overview. It was right to fire: the framing is load-bearing
+    # (#261 — a master's figure is headroom, not money). But the page now carries a
+    # whole beat on it — "Some of the biggest price tags are ceilings, not
+    # purchases", "Master agreements set a ceiling on what can be bought, not a
+    # record of what was", the $573.8M ELA against $0 paid under its own id, and
+    # the chart's own "Master agreement ceilings are not in the bars."
+    # So the assertion is on the CONTRAST, not on one spelling of it: the page must
+    # say a ceiling is not the other thing. A page that merely mentions ceilings
+    # still fails.
+    # ⚠ AND IT READS THE PARTIALS THE OVERVIEW INCLUDES, not just its own file.
+    # The storyboard beat that now carries most of this framing lives in
+    # `procurement.partials.digital-services-storyboard`; a guard reading one file
+    # would report the framing missing from a page that publishes it three times.
+    _published = ov + _included_partials(ov)
+    _contrast = re.search(
+        r'ceilings?\s*(?:</?[a-z][^>]*>\s*)*(?:are\s+|is\s+)?,?\s*'
+        r'(?:</?[a-z][^>]*>\s*)*not\s+(?:</?[a-z][^>]*>\s*)*'
+        r'(?:spend|purchases|a record|money|payments|in the bars|included)',
+        _published, re.I | re.S)
+    assert _contrast, (
+        "the Overview no longer says a master-agreement ceiling is NOT spend. "
+        "That contrast is the whole of #261: 44%% of the queue headline had "
+        "never been drawn against, and two flagged vendors had $0 committed "
+        "against $397.2M and $323.7M of ceiling.")
     # ⚠ And it must not be added to anything: no arithmetic mixing the two.
-    assert not re.search(r"stats\['total'\][^\n]*pipe\[", ov), \
+    assert not re.search(r"stats\['total'\][^\n]*pipe\[", cv), \
         "a total is being combined with a pipeline ceiling"
 
 
@@ -264,8 +362,37 @@ def test_all_three_pages_share_one_scope_note():
 
 def test_the_scope_note_percentages_are_the_only_typed_ones_in_the_overview():
     """The licences page already bans hardcoded percentages in its copy; the Overview
-    now makes the same promise. Its figures all come from the payload."""
-    body = _strip_php_comments(open(OVERVIEW, encoding='utf-8').read())
+    now makes the same promise. Its figures all come from the payload.
+
+    ⚠⚠ THIS READ THE PAGE'S OWN FILE ONLY, AND THE PAGE PUBLISHED FROM A PARTIAL.
+    The storyboard `@include`d into the Overview typed **38 figures** in rendered
+    copy — including "Ten products account for 79% of the money" — while its only
+    four Blade expressions in 793 lines were `route()` calls. Measured 2026-09-14:
+    that sentence's four figures had ALL drifted ($1.37B/948/431/79% against a
+    live $1.77B/1,601/814/63.4%). The guard was green throughout, because a guard
+    that reads only the page's own file measures less than the page publishes —
+    the same blind spot `_included_partials` was written for one guard over.
+    """
+    # ⚠ Includes expanded IN PLACE (bladeview.py), not appended: a JS-only
+    # partial (`slice-pies-js`) sits inside the page's <script>, and appended at
+    # the end it lost that wrapper, so `cutout: '58%'` read as rendered copy.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'bladeview', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bladeview.py'))
+    bv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bv)
+    # ⚠ ONE partial is excluded, and only because it carries its OWN assertion
+    # directly above this one: `sub.digital-scope-note` states the classifier's
+    # measured accuracy (95.8% / 97.5%), which the page cannot compute, and
+    # `test_the_three_pages_share_one_scope_note` requires those figures to be
+    # present AND to name the 120-contract sample they came from. Excluding a
+    # file that is guarded elsewhere is not a hole; excluding one that is not
+    # would be, so the exclusion asserts the other guard's anchor still exists.
+    assert '120-contract sample' in open(SCOPE_NOTE, encoding='utf-8').read(), \
+        ("the scope note no longer names its sample, so it is no longer covered "
+         "by its own guard and must not be excluded from this one")
+    body = _strip_php_comments(re.sub(r'\{\{--.*?--\}\}', '',
+                               bv.expand(OVERVIEW, skip={'sub.digital-scope-note'}), flags=re.S))
     # Strip Blade expressions — a computed `{{ number_format(...) }}%` is the CORRECT
     # way to print a percentage and must not be mistaken for a literal.
     body = re.sub(r'\{\{.*?\}\}', '', body, flags=re.S)
@@ -319,21 +446,52 @@ def test_the_controller_passes_every_payload_key_the_overview_reads():
     """
     ctrl = open(os.path.join(ROOT, 'app/app/Http/Controllers/ProcurementController.php'),
                 encoding='utf-8').read()
-    view = _strip_php_comments(open(OVERVIEW, encoding='utf-8').read())
 
-    # Payload-backed variables the rebuilt Overview reads. ⚠ Each must be handed over
-    # by the controller; a key that only exists in the API is invisible to the page.
-    for var, key in (('$composition', 'composition'),
-                     ('$pipeline', 'pipeline'),
-                     ('$scope', 'scope'),
-                     ('$stats', 'stats'),
-                     ('$contracts', 'contracts'),
-                     ('$vendors', 'vendors'),
-                     ('$expiring', 'expiring')):
-        assert var in view, f"the Overview no longer reads {var} — update this list"
-        assert re.search(rf"'{key}'\s*=>", ctrl), \
-            (f"ProcurementController does not pass '{key}' to the view, so the page "
-             f"reads {var} as empty and renders that section as nothing — silently")
+    # Payload-backed variables each page reads. ⚠ Each must be handed over by the
+    # controller; a key that only exists in the API is invisible to the page.
+    # ⚠ Since the 2026-08-21 reorg the shared loader feeds THREE views (Overview,
+    # Contracts, Vendors) and the moved sections took their payload reads with
+    # them — the pipeline block reads $pipeline on the CONTRACTS page now. A
+    # per-view list, or a section could move and silently lose its data again.
+    per_view = {
+        OVERVIEW: (('$composition', 'composition'), ('$scope', 'scope'),
+                   ('$stats', 'stats'), ('$expiring', 'expiring'),
+                   ('$awardByStartYear', 'awardByStartYear'),
+                   # ⚠ Read by the STORYBOARD partial, not by the page's own
+                   # file. Both are dereferenced directly (`$licStory['arcgis']`,
+                   # `$maStory['count']`) rather than through `?? []`, on
+                   # purpose: this guard exists because a politely-degrading read
+                   # is what made the missing `composition` key invisible, so a
+                   # missing key here must take the page down loudly instead.
+                   ('$licStory', 'licStory'), ('$maStory', 'maStory'),
+                   ('$calendar', 'calendar')),
+        # ⚠ 2026-09-23: the pipeline block moved to Agreements, and the queue to
+        # its own page — each list follows its section.
+        os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-expiring.blade.php'):
+                  (('$contracts', 'contracts'), ('$calendar', 'calendar'),
+                   ('$expiring', 'expiring'), ('$contractOptions', 'contractOptions'),
+                   ('$awardByStartYear', 'awardByStartYear')),
+        os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-review.blade.php'):
+                  (('$expiring', 'expiring'), ('$queueFlags', 'queueFlags')),
+        os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-agreements.blade.php'):
+                  (('$pipe', 'pipe'), ('$ma', 'ma')),
+        os.path.join(ROOT, 'app/resources/views/procurement/digital-reform-vendors.blade.php'):
+                  (('$vendors', 'vendors'), ('$scope', 'scope')),
+    }
+    # ⚠⚠ THE OVERVIEW'S READS NOW INCLUDE ITS PARTIALS. The storyboard reads
+    # $licStory, $maStory, $composition, $calendar and $awardByStartYear from a
+    # file the page @includes, so a per-view list built from the page's own text
+    # would not have seen them — and the whole point of this guard is the seam
+    # between the controller and what the page actually renders.
+    for view_path, pairs in per_view.items():
+        src = open(view_path, encoding='utf-8').read()
+        view = _strip_php_comments(src) + '\n' + _included_partials(src)
+        name = os.path.basename(view_path)
+        for var, key in pairs:
+            assert var in view, f"{name} no longer reads {var} — update this list"
+            assert re.search(rf"'{key}'\s*=>", ctrl), \
+                (f"ProcurementController does not pass '{key}', so {name} reads "
+                 f"{var} as empty and renders that section as nothing — silently")
 
     # And the drill-down parameter must reach the API, or clicking a segment does
     # nothing at all.

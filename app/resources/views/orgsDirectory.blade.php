@@ -16,7 +16,21 @@
 		.org-card-desc { font-size: var(--db-text-sm); color: var(--db-text-muted); margin: var(--db-space-15) 0 0; line-height: var(--db-leading-snug); }
 		.org-card-foot { display: flex; gap: var(--db-space-2); margin-top: var(--db-space-15); padding-top: var(--db-space-15); border-top: 1px solid var(--db-border); flex-wrap: wrap; }
 		.org-card-foot .stat-label { font-size: var(--db-text-2xs); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); color: var(--db-text-muted); }
-		.org-card-foot .stat-val { font-weight: var(--db-weight-bold); }
+		{{-- A Website value is ONE unbreakable token, so the card grew past its
+		     column and the PAGE scrolled sideways: measured documentElement
+		     .scrollWidth 1512 against innerWidth 1440. Same family as the clipped
+		     -tile defect, and the same fix the shared .db-stat-value already
+		     carries. Scoped here because these two views are the ONLY ones that
+		     put a URL in a .stat-val (grepped; orgsAll emits a dataset count and
+		     does not scroll).
+		     ⚠ It must be `anywhere`, NOT `break-word`. Only `anywhere` shrinks the
+		     element's MIN-CONTENT size, which is what lets the flex item fit its
+		     column; `break-word` wraps the glyphs and leaves the item's min-width
+		     :auto floor at the whole URL, so the page would still scroll and would
+		     additionally need `min-width: 0` on the flex child. Measured, not
+		     assumed: a `min-width: 0` rule beside this one was mutated away and the
+		     page stayed at 1440 — inert, so it is not here. --}}
+		.org-card-foot .stat-val { font-weight: var(--db-weight-bold); overflow-wrap: anywhere; }
 		.org-card-foot .stat-val.is-navy { color: var(--db-primary); }
 		.db-card.is-hoverable a.org-card-link { color: inherit; text-decoration: none; display: block; }
 		#viewToggle { margin-left: auto; }

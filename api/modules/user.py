@@ -61,7 +61,7 @@ class User:
             
         id = self.gen_id()
         
-        self.__model.q("INSERT INTO users (id, email, pwdhash, scope) VALUES ('{}', '{}', '{}', '{}')".format(id, email, __class__.pwd_hash(pwd), scope))
+        self._exec("INSERT INTO users (id, email, pwdhash, scope) VALUES ($1, $2, $3, $4)", id, email, __class__.pwd_hash(pwd), scope)
         
         return self.newapikey(email)
         
@@ -78,7 +78,7 @@ class User:
         user = self.get_user(email=email)
         if not user:
             return 'User not found'
-        self.__model.q("DELETE FROM users WHERE email='{}'".format(email))
+        self._exec("DELETE FROM users WHERE email=$1", email)
     
     def newemail(self):
         hint = 'Email: '
@@ -115,7 +115,7 @@ class User:
         else:
             return None
                 
-        self.__model.q("UPDATE users SET email='{}' WHERE email='{}'".format(newemail, email))
+        self._exec("UPDATE users SET email=$1 WHERE email=$2", newemail, email)
 
     
     def newpassword(self):
@@ -153,7 +153,7 @@ class User:
         else:
             return None
                 
-        self.__model.q("UPDATE users SET pwdhash='{}' WHERE email='{}'".format(__class__.pwd_hash(pwd), email))
+        self._exec("UPDATE users SET pwdhash=$1 WHERE email=$2", __class__.pwd_hash(pwd), email)
     
     def newapikey(self, email=None):
         hint = 'Email: '
@@ -188,12 +188,24 @@ class User:
         #    f.write('{} {}'.format(id, email))
         if id==None and email==None:
             return None
-        sql = "SELECT id, email, pwdhash, scope FROM users WHERE {}='{}'"
-        return self.__model.select(sql.format('email', email) if not id else sql.format('id', id), 0)
+        # ⚠⚠ BOUND, NEVER FORMATTED. `email` is the /login form's `username`,
+        # unauthenticated. Spliced into the SQL, a UNION could supply its own
+        # pwdhash and scope and mint an admin token without a password
+        # (found 2026-09-24; tests/test_sql_injection.py).
+        if id:
+            return self._row("SELECT id, email, pwdhash, scope FROM users WHERE id=$1", int(id))
+        return self._row("SELECT id, email, pwdhash, scope FROM users WHERE email=$1", email)
 
     def auth_user(self, email, pwd):
-        sql = "SELECT id, email, scope FROM users WHERE email='{}' AND pwdhash='{}'".format(email, __class__.pwd_hash(pwd))
-        return self.__model.select(sql, 0, True)
+        return self._row("SELECT id, email, scope FROM users WHERE email=$1 AND pwdhash=$2",
+                         email, __class__.pwd_hash(pwd)).get('id')
+
+    def _row(self, sql, *params):
+        rows = list(self.__model.bselect_safe(sql, list(params)))
+        return rows[0] if rows else {}
+
+    def _exec(self, sql, *params):
+        return self.__model.db.prepare(sql)(*params)
         
     def gen_id(self):
         return os.urandom(10).hex()

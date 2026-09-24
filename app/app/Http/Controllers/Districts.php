@@ -104,10 +104,14 @@ class Districts extends Controller
 							$id, $type,
 							(($type == 'sd') 
 								? ['scademostats', 'schoollocations', 'scacapitalprojectschedules', 'demographics']
-								: ['nyccouncildiscretionaryfunding', 'capitalprojectsdollarscomp', 'budgetrequestsregister', 'facilitydb'])
+								: ['nyccouncildiscretionaryfunding', 'capitalprojectsdollarscomp',
+									'capitalprojectslist', 'capprojectsbudgetsandschedule',
+									'capitalprojectscommitments',
+									'budgetrequestsregister', 'facilitydb'])
 							+ (($type == 'cc') ? [5 => 'ccmembers'] : [])
-							+ (($type == 'cd') ? [5 => 'nyccommunityboards'] : [])
-						),
+							+ (($type == 'cd') ? [5 => 'nyccommunityboards'] : []),
+						\App\Custom\ProjectsDatasets::rowCounts()
+					),
 					'tblStatsUrl' => DatabookAPI::url("/get/districts/pstats-records_no/{$type}/{$id}/tblname"),
 				])
 			: abort(404);
@@ -133,21 +137,35 @@ class Districts extends Controller
 					'slist' => $ds->list,
 					'menu' => $ds->menu($type),
 					'activeDropDown' => $ds->menuActiveDD($type, $section),
-					'url' => DatabookAPI::url("/get/districts/{$type}/{$id}/capitalprojects"),
+					// ⚠⚠ NOT `/get/districts/{type}/{id}/capitalprojects`. That endpoint
+					// joins the RETIRED series to a `capitalprojects_{type}_idx` on
+					// PROJECT_ID; the spine's crosswalk is `capital_project_districts`,
+					// keyed on (agency_key, fms_id). Verified against the stats
+					// endpoint: cc/38 returns 103 rows and /get/capital/stats/cc/38
+					// reports 103 projects.
+					'url' => DatabookAPI::url("/get/capital/projects/by-district/{$type}/" . rawurlencode($id)),
 					'dataset' => ($d = DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))) && isset($d[0]) ? $d[0] : null,
 					'details' => $details,
-					'finStatUrls' => [
-						'#projects_no' => DatabookAPI::url("/get/districts/pstats-projects_no/{$type}/{$id}/pubdate"),
-						'#orig_cost' => DatabookAPI::url("/get/districts/pstats-orig_cost/{$type}/{$id}/pubdate"),
-						'#curr_cost' => DatabookAPI::url("/get/districts/pstats-curr_cost/{$type}/{$id}/pubdate"),
-						'#over_budg_am' => DatabookAPI::url("/get/districts/pstats-over_budg_am/{$type}/{$id}/pubdate"),
-						'#long_no' => DatabookAPI::url("/get/districts/pstats-long_no/{$type}/{$id}/pubdate"),
-						'#over_budg_no' => DatabookAPI::url("/get/districts/pstats-over_budg_no/{$type}/{$id}/pubdate"),
-						'#late_start_no' => DatabookAPI::url("/get/districts/pstats-late_start_no/{$type}/{$id}/pubdate"),
-						'#late_end_no' => DatabookAPI::url("/get/districts/pstats-late_end_no/{$type}/{$id}/pubdate"),
-					],
+					// ⚠⚠ THE EIGHT RETIRED-SERIES TILES ARE GONE. They hydrated from
+					// `/get/districts/pstats-*/…/pubdate` over
+					// `capitalprojectsdollarscomp` and multiplied by 1000 because that
+					// series is in THOUSANDS. One of them was `Amount Over Budget` —
+					// the label this section documents as carrying TWO definitions
+					// (every row's difference globally, but only the negative ones per
+					// district), which the rebuild DROPS rather than repointing.
+					// ⚠ `finStatUrls` is left as an empty array rather than removed:
+					// `loadFinStat()` iterates it, and an absent key is an undefined
+					// index in Laravel where an empty one is simply zero passes.
+					'finStatUrls' => [],
+					// The spine's own district-scoped stats — same endpoint the
+					// district page's capital counts already use.
+					'capital' => DatabookAPI::reqOCE("/get/capital/stats/{$type}/" . rawurlencode($id)) ?: null,
+					// ⚠ 'sd' present so this cannot become an undefined index if a
+					// school district ever reaches this handler — it has no linked
+					// agency, exactly as nta has none.
 					'linkedAgencyUrl' => [
 						'nta' => '',
+						'sd' => '',
 						'cd' => DatabookAPI::url("/get/orgs/bycd/{$id}"),
 						'cc' => DatabookAPI::url("/get/orgs/bycc/{$id}"),
 					][$type],
@@ -157,10 +175,14 @@ class Districts extends Controller
 							$id, $type,
 							(($type == 'sd') 
 								? ['scademostats', 'schoollocations', 'scacapitalprojectschedules']
-								: ['nyccouncildiscretionaryfunding', 'capitalprojectsdollarscomp', 'budgetrequestsregister', 'facilitydb'])
+								: ['nyccouncildiscretionaryfunding', 'capitalprojectsdollarscomp',
+									'capitalprojectslist', 'capprojectsbudgetsandschedule',
+									'capitalprojectscommitments',
+									'budgetrequestsregister', 'facilitydb'])
 							+ (($type == 'cc') ? [5 => 'ccmembers'] : [])
-							+ (($type == 'cd') ? [5 => 'nyccommunityboards'] : [])
-						),
+							+ (($type == 'cd') ? [5 => 'nyccommunityboards'] : []),
+						\App\Custom\ProjectsDatasets::rowCounts()
+					),
 					'tblStatsUrl' => DatabookAPI::url("/get/districts/pstats-records_no/{$type}/{$id}/tblname"),
 				])
 			: abort(404);
@@ -186,13 +208,15 @@ class Districts extends Controller
 					'details' => $details,
 					'datasets' => $ds->stats_data_sources(
 							DatabookAPI::req('/get/datasets/all'),
-							$sampleSchool
-						)['tbl'],
+							$sampleSchool, null,
+						\App\Custom\ProjectsDatasets::rowCounts()
+					)['tbl'],
 					'tblStatsUrls' => $ds->stats_data_sources(
 							DatabookAPI::req('/get/datasets/all'),
 							$sampleSchool,
-							true
-						)['urls'],
+							true,
+						\App\Custom\ProjectsDatasets::rowCounts()
+					)['urls'],
 				] 
 				/*
 				+ 
@@ -245,13 +269,15 @@ class Districts extends Controller
 									),								// schoolSect($distId, $distName, $code, $schoolName, $sect, $sectN)
 					'datasets' => $ds->stats_data_sources(
 							DatabookAPI::req('/get/datasets/all'),
-							$school
-						)['tbl'],
+							$school, null,
+						\App\Custom\ProjectsDatasets::rowCounts()
+					)['tbl'],
 					'schoolStatsUrl' => DatabookAPI::url("/get/schools/schoolStats/{$code}"),
 					'tblStatsUrls' => $ds->stats_data_sources(
 							DatabookAPI::req('/get/datasets/all'),
-							$school
-						)['urls'],
+							$school, null,
+						\App\Custom\ProjectsDatasets::rowCounts()
+					)['urls'],
 					'map' => true,
 				])
 			: abort(404);

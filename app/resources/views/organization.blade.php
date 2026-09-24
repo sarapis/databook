@@ -117,6 +117,17 @@
 				<div class="col-md-{{ $dw }}">
 					<div class="notice_org">
 						<h2 class="card-title mb-4">Job Opportunities</h2>
+					<div class="db-alert db-alert-info mt-3">
+						<div class="db-alert-body">
+							<i class="bi bi-info-circle"></i> <strong>Scope:</strong> this is the City's
+							<strong>central careers portal</strong> only. Employers that run their own hiring
+							systems do not appear here &mdash; including the Department of Education, CUNY,
+							the Board of Elections, the City Council, the District Attorneys and the Borough
+							Presidents. So this is <strong>not a count of every City vacancy</strong>, and an
+							agency showing no openings may simply hire elsewhere.
+						</div>
+					</div>
+
 					</div>
 					<div id="data_container" class="col float-left mb-4">
 						<div class="table-responsive" style="overflow-x:visible;">
@@ -344,8 +355,27 @@
 						<canvas id="chart_headcount" height="190" style="width:100%; height:190px; display:none;"></canvas>
 						<h5 class="mt-3 mb-0" style="font-size:16px;"><b>Spending</b></h5>
 						<canvas id="chart_as" height="190" style="width:100%; height:190px; display:none;"></canvas>
+						{{-- ⚠ NAMED, because this chart is the ONE thing on the org profile
+						     that is not current: it plots `capitalprojectsdollarscomp`,
+						     whose last publication is 2023-10-26, so its line stops in
+						     2023 while every figure around it is live. The capital tab's
+						     tiles are the spine; this is the older series' history.
+						     ⚠⚠ AND MY FIRST VERSION OF THIS NOTE WAS WRONG, caught by
+						     rendering NYCHA rather than by re-reading the code: I wrote
+						     that the caption "is only rendered with the canvas, which
+						     stays display:none until the series arrives". It does not —
+						     `drawPrjstatChart` shows the canvas whenever the callback
+						     fires, 0 rows included, so NYCHA rendered an EMPTY chart under
+						     a caption about a series it has no row in. Both are gated on
+						     the data now. --}}
 						<h5 class="mt-3 mb-0" style="font-size:16px;"><b>Capital Projects</b></h5>
 						<canvas id="chart_prj" height="195" style="width:100%; height:195px; display:none;"></canvas>
+						<p id="chart_prj_note" class="db-text-muted mb-0" style="display:none; font-size:var(--db-text-2xs)">
+							Current budget by publication date, from the 2023 project detail
+							series &mdash; NYC last published it 2023-10-26.
+							<a href="{{ route('orgSection', ['id' => $id, 'orgslug' => Str::slug($org['name'], '-'), 'section' => 'projects']) }}">This agency&rsquo;s capital projects</a>
+							are read from Databook&rsquo;s current capital spine.
+						</p>
 					</div>
 				</div>
 				
@@ -359,7 +389,7 @@
 						<div>
 							<div id="headingThree">
 								<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="true" aria-controls="collapseThree">
-									This agency’s profile has <span id="total_records"></span> records from <span id="total_datasets"></span> datasets. Click here to learn more.
+									This agency’s profile has <span id="total_records"></span> records from <span id="total_datasets"></span> datasets.<span id="stats_incomplete" class="text-danger" style="display:none"></span> Click here to learn more.
 								</button>
 							</div>
 							<div id="collapseThree" class="collapse hide" aria-labelledby="socHeadingOne" data-parent="#accordionThree">
@@ -929,20 +959,18 @@
 						tension: 0.1,
 						datalabels: {display: false},
 					},
-					{
-						label: 'Amount Over Budget',
-						data: [],
-						fill: false,
-						borderColor: (window.DBChart ? DBChart.accent : '#B9B8D3'),
-						borderWidth: 2,
-						pointBackgroundColor: 'transparent',
-						pointBorderColor: '#CCCCCC',
-						pointBorderWidth: 3,
-						pointHoverBorderColor: 'rgba(0, 0, 0, 0.8)',
-						pointHoverBorderWidth: 6,
-						tension: 0.1,
-						datalabels: {display: false},
-					}
+					// ⚠⚠ THE `Amount Over Budget` SERIES IS GONE (invariant 11), and this
+					// was the FOURTH surface still plotting it — the one a text scan of
+					// the rendered page CANNOT SEE, because Chart.js draws its legend
+					// into the canvas. A sweep of every capital URL for the string
+					// "Amount Over Budget" reported this page clean while
+					// `window.chart3.data.datasets[1].label` was exactly that, over 14
+					// publication dates. Read the chart's DATA, not the page's text.
+					// ⚠ It came from `-sum("BUDG_DIFF")` over `capitalprojectsdollarscomp`
+					// — the label this section documents as carrying two definitions, and
+					// the same expression the district tiles and the budget-line page
+					// dropped. `Current Budget` stays: it is one measure, from one
+					// column, and the caption below says which series and which years.
 				]
 			},
 			options: {
@@ -1009,10 +1037,43 @@
 		};
 
 
+		var statLoadFailures = 0
+
+		// A dataset whose count could not be loaded is NOT a dataset with no
+		// records, and the difference is a published figure. The totals below
+		// ("N records from M datasets") are built by incrementing per successful
+		// response, so a rejected request silently UNDERCOUNTS both -- and two
+		// people loading the same profile would see different numbers depending
+		// on network timing.
+		//
+		// Measured 2026-08-31: the org profile fires 27 of these at once against
+		// an nginx burst of 20, so 7+ were rejected on EVERY load, for every
+		// visitor, on every agency. 2,916 such rejections across 165 IPs in one
+		// 3.7-day window. The nginx side is fixed in security.conf/ssl.conf; this
+		// makes the remaining failures VISIBLE instead of quietly wrong.
+		function statUnavailable(dsName, status) {
+			statLoadFailures++
+			$('#stats_' + dsName)
+				.text('--')
+				.attr('title', 'Could not load this count (HTTP ' + (status || '?') + ')')
+			$('#stats_incomplete')
+				.text(' ' + statLoadFailures + ' dataset' +
+				      (statLoadFailures === 1 ? '' : 's') +
+				      ' could not be counted, so these totals are incomplete.')
+				.show()
+		}
+
 		function loadTableStat(dsName, url) {
 			var datatable = $('#myTable').DataTable();
 			fapireq(url, function (resp) {
-				if (resp['data'][0]['count']) {
+				// Order matters: check the failure FIRST. `resp['data'][0]['count']`
+				// throws a TypeError on an empty array, so before this the error
+				// path did not merely mis-render -- it threw, leaving the row in
+				// place with no count and the totals never incremented.
+				if (resp['error'] || !resp['data'] || !resp['data'].length) {
+					if (resp['error']) { statUnavailable(dsName, resp['status']); return }
+				}
+				if (resp['data'] && resp['data'][0] && resp['data'][0]['count']) {
 					$('#stats_'+dsName).text(resp['data'][0]['count'])
 					$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['count'])
 					$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
@@ -1088,13 +1149,21 @@
 		}
 		
 		function drawPrjstatChart(data) {
+			// ⚠ NOTHING TO PLOT IS NOT AN EMPTY CHART. An agency with no rows in the
+			// 2023 series (NYCHA reads 0) showed a blank canvas under a caption about
+			// that series — measured on the rendered page, which is the only thing
+			// that could see it.
+			if (!data || !data.length) { return; }
 			$('#chart_prj').show();
+			$('#chart_prj_note').show();
 			var canvas3 = document.getElementById("chart_prj");
 			window.chart3 = new Chart(canvas3, config3);
 			for (let i in data) {
 				window.chart3.data.labels.push(toUsDateNowrap(data[i]['pub_date']))
+				// ⚠ `budg_diff` IS STILL SERVED AND DELIBERATELY NOT PLOTTED. Pushing
+				// into `datasets[1]` after removing that dataset throws on the first
+				// point and leaves the whole chart blank.
 				window.chart3.data.datasets[0].data.push(data[i]['budg_curr'])
-				window.chart3.data.datasets[1].data.push(data[i]['budg_diff'])
 			}
 			window.chart3.update()
 		}

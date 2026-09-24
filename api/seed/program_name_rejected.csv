@@ -1,0 +1,20 @@
+name,reason,decided_by
+# Candidate program names a reviewer has judged NOT to be one. ONE ROW PER
+# DECISION, written by scripts/../api/export_review_decisions.py.
+#
+# ⚠⚠ THIS FILE IS READ BY `build_program_name_candidates.py`, WHICH EXCLUDES
+# THESE NAMES. That is the whole point: a rejection recorded as silence comes
+# back on every regeneration, and the reviewer answers the same question
+# forever. The NYCHA crosswalk learned this the expensive way — 110 curated
+# no-match markers there suppress 211 re-proposals per rebuild (#155).
+#
+# ⚠ It is NOT the curated seed. `program_curated.csv` says what a program IS;
+# this says what a candidate is NOT. An earlier draft wrote rejections into the
+# curated file as rule="rejected", which `load_curated` refuses — so the row was
+# skipped and the rejection did nothing while looking recorded.
+#
+# ⚠ Matching is on the NORMALISED name (the extractor's own `norm`), so a
+# rejection of "Real Time" also suppresses "REALTIME" — the same merge the
+# candidate extractor already does.
+#
+# ⚠ MUST BE REAL QUOTED CSV — reasons are prose and contain commas.

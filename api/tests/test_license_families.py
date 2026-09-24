@@ -5,6 +5,7 @@ The mapping is what stops the page telling lies of omission: ungrouped,
 before and after a rename, and `ArcGIS`/`ESRI ArcGIST` split Esri in half.
 """
 import csv
+import csv
 import os
 import re
 
@@ -186,12 +187,13 @@ def test_licenses_page_is_published_and_still_states_its_limits():
 
     menubar = os.path.join(ROOT, 'app/resources/views/sub/menubar.blade.php')
     nav = open(menubar, encoding='utf-8').read()
-    assert 'digital-reform.licenses' in nav, \
-        "the Licenses page is no longer reachable from the nav, so publishing it " \
+    # route renamed .licenses -> .products in the 2026-08-21 reorg
+    assert 'digital-reform.products' in nav, \
+        "the Products page is no longer reachable from the nav, so publishing it " \
         "left it as unfindable as it was before"
 
     # ⚠ The price of publication: the reader must still be told what this is.
-    assert 'db-analysis-badge' in body, \
+    assert _tells_the_reader_it_is_an_analysis(body), \
         "the Analysis badge is gone from a now-public AI-derived analysis"
     low = body.lower()
     assert 'unreviewed' in low or 'uncurated' in low, \
@@ -302,6 +304,42 @@ def test_vendor_links_require_an_unambiguous_supplier_id():
             f"{view} links a vendor without checking an id resolved"
 
 
+# ⚠⚠ THE MARKER IS A PROPERTY, NOT ONE PIECE OF MARKUP — re-expressed 2026-09-12.
+# These two guards named `db-analysis-badge`, a one-word chip in the eyebrow. The
+# Digital Services header simplification dropped that eyebrow from all seven pages
+# and both guards fired, correctly: they were protecting a real property. But the
+# property is "a reader is told this page layers an interpretation on official
+# data", and on the five INDEX pages that survives twice over — each includes
+# `sub.analysis-banner`, whose sentence says far more than the chip did, and each
+# `<h1>` now literally reads "Digital Services Analysis: …".
+#
+# ⚠ The two LEAF pages (family, capability) had neither, so they really were left
+# unmarked; the fix was to include the banner there, not to keep the chip. So the
+# guards assert the PROPERTY and any of the three carriers satisfies it — never
+# relaxed, since a page with none of them still fails.
+def _tells_the_reader_it_is_an_analysis(body):
+    """True when a public Digital Services page carries the Analysis identity.
+
+    ⚠⚠ IT STRIPS COMMENTS FIRST, AND IT HAD TO — the first draft did not, and the
+    Blade comment I wrote beside the restored banner NAMES `db-analysis-badge`
+    while explaining why the badge went away. Deleting the real marker left the
+    guard green off my own prose. This repo's most-repeated guard defect, met one
+    more time, and caught only by mutating the marker away and watching nothing
+    happen.
+    """
+    body = re.sub(r'\{\{--.*?--\}\}', '', body, flags=re.S)
+    body = re.sub(r'\{\{--.*$', '', body, flags=re.S)   # an unterminated comment
+    body = re.sub(r'/\*.*?\*/', '', body, flags=re.S)
+    if 'db-analysis-badge' in body:          # the original eyebrow chip
+        return True
+    if re.search(r"@include\(\s*['\"]sub\.analysis-banner['\"]\s*\)", body):
+        return True                          # the shared banner, which says more
+    if re.search(r"@include\(\s*['\"]sub\.analysis-tag['\"]\s*(?:,.*?)?\)", body):
+        return True                          # the compact tag; its own guard pins the caveat
+    h1 = re.search(r'<h1[^>]*>(.{0,80}?)</h1>', body, re.S)
+    return bool(h1 and 'Analysis' in h1.group(1))
+
+
 def test_family_pages_are_published_with_their_provenance_markers():
     """⚠ Published with the parent 2026-08-11 (was: asserted noindex). A family page
     is only as reviewed as the family it describes — the top 20 were reviewed, the
@@ -312,12 +350,34 @@ def test_family_pages_are_published_with_their_provenance_markers():
         encoding='utf-8').read()
     assert not re.search(r'name=["\']robots["\']\s+content=["\'][^"\']*noindex', body), \
         "family pages are back to noindex — invert this guard if that is intended"
-    assert 'db-analysis-badge' in body, "the Analysis badge is gone from a public page"
+    assert _tells_the_reader_it_is_an_analysis(body), (
+        "this public, indexable, AI-derived page carries NO Analysis marking: no "
+        "badge, no `sub.analysis-banner`, and no 'Analysis' in its own <h1>")
     assert 'summary_curated' in body, \
         "the curated-vs-auto marker on the summary is gone, so a public reader " \
         "cannot tell a reviewed product description from a generated one"
     assert '92%' in body, \
         "the family page no longer states the is_license agreement rate"
+
+
+def test_the_capability_page_is_marked_as_an_analysis_too():
+    """⚠ A GAP FOUND BY MUTATION, NOT BY READING. Stripping the Analysis marking
+    off `/research/digital-reform/products/function/{cap}` changed nothing in the
+    suite: the capability page is public, indexable and AI-derived — its whole
+    function taxonomy is classifier output — and NOTHING asserted it was marked.
+    It lost its badge in the same header simplification as its six siblings and
+    was the one page no guard covered.
+    """
+    body = open(os.path.join(
+        ROOT,
+        'app/resources/views/procurement/digital-reform-license-capability.blade.php'),
+        encoding='utf-8').read()
+    assert not re.search(r'name=["\']robots["\']\s+content=["\'][^"\']*noindex', body), \
+        "the capability page is back to noindex — invert this guard if intended"
+    assert _tells_the_reader_it_is_an_analysis(body), (
+        "the capability page carries NO Analysis marking: no badge, no "
+        "`sub.analysis-banner`, and no 'Analysis' in its own <h1>. Its function "
+        "tags are classifier output on a public page.")
 
 
 def test_summaries_are_grounded_in_our_data_not_model_knowledge():
@@ -365,7 +425,7 @@ def test_vendor_software_section_links_to_family_pages():
     body = open(view, encoding='utf-8').read()
     if 'section-software' not in body:
         return  # section removed deliberately; nothing to enforce
-    assert "route('research.digital-reform.license-family'" in body, \
+    assert "route('research.digital-reform.product-family'" in body, \
         "the software section no longer links to family pages"
     assert 'not yet reviewed' in body, \
         "the software section lost its uncurated caveat on a PUBLIC page"
@@ -640,9 +700,45 @@ def test_per_seat_cost_is_never_computed():
     assert '_term_years' in src and 'per_year' in src
     assert 'per_seat' not in src and 'per_site' not in src, \
         "a per-seat/per-site figure is being computed, but no unit count exists"
+
+    # ⚠ THIS GUARD FIRED CORRECTLY on 2026-09-15 and was RE-EXPRESSED, not relaxed.
+    # It used to read the arithmetic out of `def _term_years` in this file. The rule
+    # moved to modules/contractterm.py when a SECOND consumer appeared (the
+    # call-center lens's annual run-rate), so the abstention is still there — the
+    # guard was looking in the wrong file. It now follows the delegation, which
+    # covers both callers instead of one.
     m = re.search(r'def _term_years.*?(?=\ndef )', src, re.DOTALL)
-    assert m and 'return None' in m.group(0), \
-        "_term_years no longer abstains on an unusable term"
+    assert m, "_term_years is gone from licenses.py"
+    body = m.group(0)
+    # ⚠⚠ BEHAVIOURAL, NOT A SOURCE SCAN — and the source scan it replaces was
+    # BLIND. The old form asserted the string `return None` appeared inside
+    # `_term_years`; the `except` clause returns None too, so an implementation
+    # that DEFAULTED on an out-of-range term ("else 1.0") passed it. Verified by
+    # mutation on 2026-09-15: the scan stayed green on exactly that change.
+    # Calling the function is the only form that can see it.
+    if 'contractterm' in body:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            '_ct_guard', os.path.join(ROOT, 'api/modules/contractterm.py'))
+        ct = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ct)
+        # ⚠ 01/2020 -> 01/2025 is 5.00; 01/2020 -> 12/2024 is 4.92, because the
+        # rule counts MONTHS and ignores days. My first draft asserted 5.0 for the
+        # latter and failed on correct code.
+        assert ct.years('01/01/2020', '01/01/2025') == 5.0, 'the happy path broke'
+        assert ct.years('01/01/2020', '12/31/2024') == 4.92, 'the month rule changed'
+        assert abs(ct.annual(10000000, '01/01/2020', '01/01/2025') - 2000000) < 1, \
+            'annual is no longer value / term years'
+        for bad in (('', ''), (None, None), ('nonsense', '01/01/2020'),
+                    ('01/01/2020', '01/01/2020'),      # zero-length term
+                    ('01/01/2020', '01/01/2099')):     # 79 years, out of range
+            assert ct.years(*bad) is None, \
+                f'contractterm.years defaulted instead of abstaining on {bad}'
+            assert ct.annual(1000000, *bad) is None, \
+                f'contractterm.annual produced a rate from an unusable term {bad}'
+    else:
+        assert 'return None' in body, \
+            "_term_years no longer abstains on an unusable term"
 
 
 def test_capability_vocabulary_does_not_conflate_unlike_functions():
@@ -733,14 +829,12 @@ def test_fragmentation_needs_many_products_not_just_many_agencies():
                      src), \
         "`other` is no longer pinned to the end of the function table"
 
-    # ⚠ And the rule must be STATED where the badge is rendered. A threshold the
-    # reader cannot see is indistinguishable from an opinion.
-    view = open(os.path.join(
-        ROOT, 'app/resources/views/procurement/digital-reform-licenses.blade.php'),
-        encoding='utf-8').read()
-    assert 'worth consolidating' in view.lower(), "the badge is gone from the page"
-    assert re.search(r'at least 5 distinct', view), \
-        "the page no longer states what 'worth consolidating?' actually requires"
+    # ⚠ RETIRED 2026-09-18, not relaxed: the two assertions that stood here required
+    # the "worth consolidating?" badge and its stated rule to RENDER on the index.
+    # The owner removed consolidation from that page entirely, so a guard demanding
+    # the badge would forbid the decision. The API-side properties above -- the
+    # predicate needs products AND agencies AND a value floor, caps the badge, and
+    # never flags the abstention -- still hold for any consumer of `fragmented`.
 
 
 def test_the_rate_card_seed_is_actually_consumed():
@@ -775,12 +869,13 @@ def test_the_function_view_is_navigable():
     idx = open(os.path.join(
         ROOT, 'app/resources/views/procurement/digital-reform-licenses.blade.php'),
         encoding='utf-8').read()
-    assert "license-capability" in idx, "the function rows are not clickable"
+    # route renamed .license-capability -> .product-capability (2026-08-21 reorg)
+    assert "product-capability" in idx, "the function rows are not clickable"
 
     fam = open(os.path.join(
         ROOT, 'app/resources/views/procurement/digital-reform-license-family.blade.php'),
         encoding='utf-8').read()
-    assert "license-capability" in fam, "a family page does not show its function"
+    assert "product-capability" in fam, "a family page does not show its function"
 
     api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
     assert '/capability/{cap}' in api, "the function drill-down endpoint is gone"
@@ -867,64 +962,31 @@ def test_the_reviewed_share_is_computed_never_typed():
 
 
 def test_the_calendar_discloses_the_contracts_it_drops():
-    """⚠⚠ ~72% OF THIS INVENTORY HAD ALREADY ENDED AND THE PAGE NEVER SAID SO.
-    `_by_year` skips any contract whose end year is past, so the renewal calendar
-    summed to 262 contracts while the headline tile above it read 948 — and the
-    $1.37B beside that tile is what a reader quotes as current exposure.
+    """⚠ MOVED 2026-08-21 (Phase 2 of the reorg): the renewal calendar now covers
+    the whole technology universe and lives on the CONTRACTS page, so this guard
+    follows it there. Two calendars with different denominators answering "what
+    renews when?" is the two-expiring-figures defect, so the Products page must
+    only POINT at it.
 
-    Only `no_end_date` was disclosed, which made the omission look complete.
-
-    The buckets must also RECONCILE: year rows + ended + no_end_date == the
-    contract count. Without that, a future filter can drop rows into a gap again
-    and every visible total will still look plausible.
+    The property being guarded is unchanged and is the important part: a calendar
+    that silently drops rows reads as the whole inventory. Contracts that had
+    already ended were once dropped in silence while still counting toward every
+    headline figure, so a table summing to 262 sat under a tile reading 948.
     """
-    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
-    assert '"ended"' in api, "the calendar no longer reports contracts that ended"
-    assert '"active_contracts"' in api and '"active_value"' in api, \
-        "the summary no longer distinguishes running contracts from historical ones"
-    # ⚠ Derived by subtraction from the calendar's own bucket, deliberately: two
-    # independent definitions of "active" is how the two expiring figures on this
-    # page came to disagree in the first place.
-    assert 'by_year["ended"]["contracts"]' in api, \
-        "active count is computed independently of the calendar again"
+    contracts_view = open(os.path.join(
+        ROOT, 'app/resources/views/procurement/digital-reform-expiring.blade.php'),
+        encoding='utf-8').read()
+    assert 'have already' in contracts_view and 'ended' in contracts_view, \
+        "the Contracts page no longer tells the reader the calendar omits ended contracts"
+    assert 'no usable end date' in contracts_view, \
+        "the calendar no longer discloses contracts with no usable end date"
 
+    # And the Products page must not have grown a second calendar back.
     view = open(os.path.join(
         ROOT, 'app/resources/views/procurement/digital-reform-licenses.blade.php'),
         encoding='utf-8').read()
-    assert 'had already ended' in view, \
-        "the page no longer tells the reader the calendar omits ended contracts"
-    assert 'historical' in view.lower(), \
-        "the page no longer says this analysis is largely historical"
-
-    # The reconciliation, on synthetic rows so it tests the arithmetic and not
-    # whatever prod happens to hold today.
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        '_lic_by_year', os.path.join(ROOT, 'api/routers/licenses.py'))
-    # ⚠ Loading the module by path would import fastapi/postgrex; the function is
-    # pure, so exec just its source instead.
-    src = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
-    m = re.search(r'\ndef _by_year\(rows\):.*?\n(?=\n@|\ndef |\Z)', src, re.DOTALL)
-    assert m, "_by_year is gone"
-    ns = {'time': __import__('time')}
-    exec(m.group(0), ns)                                        # noqa: S102
-    this_year = ns['time'].strftime('%Y')
-    rows = [
-        {'end_year': '1999', 'value': 10.0, 'expiring': False, 'family': 'Old'},
-        {'end_year': '1998', 'value': 5.0, 'expiring': False, 'family': 'Old'},
-        {'end_year': this_year, 'value': 100.0, 'expiring': True, 'family': 'Big'},
-        {'end_year': this_year, 'value': 1.0, 'expiring': True, 'family': 'Small'},
-        {'end_year': '', 'value': 7.0, 'expiring': False, 'family': 'NoDate'},
-    ]
-    out = ns['_by_year'](rows)
-    counted = (sum(y['contracts'] for y in out['years'])
-               + out['ended']['contracts'] + out['no_end_date'])
-    assert counted == len(rows), \
-        f"the calendar buckets lose rows: {counted} accounted for of {len(rows)}"
-    assert out['ended'] == {'contracts': 2, 'value': 15.0}
-    # And each year names its own largest line, so a row dominated by one
-    # agreement cannot read as a broad-based cliff.
-    assert out['years'][0]['top_family'] == 'Big'
+    assert 'digital-reform.contracts' in view, \
+        "the Products page lost its pointer to the calendar's new home"
 
 
 def test_capped_lists_carry_their_full_length():
@@ -949,11 +1011,29 @@ def test_capped_lists_carry_their_full_length():
             f"{name} is no longer built in full before slicing"
         assert f'len({name})' in api, f"`totals` no longer measures {name} unsliced"
 
+    # ⚠⚠ THE CAPS ARE GONE (2026-09-15) AND THIS ASSERTION REPLACED ONE THAT HAD
+    # BECOME BLIND. It used to read `view.count('Showing the top') >= 2` — the
+    # disclosure SENTENCES, which still sit in the view inside `@if(total >
+    # count)` guards and are simply never reached now. Re-adding `vendor_all[:25]`
+    # was mutation-tested against that assertion and it PASSED: it inspected a
+    # mention, not what the code did. This one reads the served expressions.
+    #
+    # Why the caps went: the section's tables now sort on click, and a client-side
+    # sort over a capped list sorts THE CAP. Ascending by value on "top 25 of 408"
+    # shows the 25 largest smallest-first, which reads as the smallest vendors —
+    # the `by_vendor` defect arriving through a sort control instead of a heading.
+    for name in ('methods_all', 'agency_all', 'vendor_all'):
+        assert re.search(rf'"by_\w+": {name},', api), (
+            f"{name} is capped again. A slice here is only safe if the table that "
+            f"renders it cannot be client-sorted — see js/db-tables.js.")
+
+    # ⚠ The disclosure branches STAY, unreached, so that a future cap cannot be
+    # silent: re-slice above and the sentence starts rendering again on its own.
     view = open(os.path.join(
         ROOT, 'app/resources/views/procurement/digital-reform-licenses.blade.php'),
         encoding='utf-8').read()
     assert view.count('Showing the top') >= 2, \
-        "the capped agency/vendor tables no longer state that they are capped"
+        "the capped-list disclosure was deleted; a future cap would now be silent"
 
 
 def test_capability_labels_live_in_the_seed_not_in_a_view():
@@ -1595,17 +1675,13 @@ def test_the_family_table_is_one_table_and_every_column_sorts():
     assert 'id="fragmented"' in view, \
         "the #fragmented anchor is gone; links to the merged-away table now land nowhere"
 
-    # The finding survives, stated from the payload rather than typed.
-    assert '$fragCount' in view and "$totals['fragmented']" in view, \
-        "the consolidation count is no longer rendered from the payload"
-    assert '$fragRule' in view and "consolidation_rule" in view, \
-        "the threshold is no longer read from the payload — it must not be typed"
-    assert re.search(r"\$fragRule\['min_agencies'\]", view), \
-        "the rule's numbers are not rendered, so the badge is an unexplained opinion"
-    # ⚠ $totals must be assigned BEFORE it is read. Written the other way round
-    # first, the count silently rendered 0 — a wrong number that looks measured.
-    assert view.index("$totals = $lic['totals']") < view.index("$fragCount ="), \
-        "$fragCount reads $totals before it is assigned; it will render 0"
+    # ⚠ RETIRED 2026-09-18: the consolidation count, rule and per-row badge no
+    # longer render here (owner decision), so the assertions that required them
+    # would forbid it. The API still serves `fragmented`, `consolidation_candidate`
+    # and `consolidation_rule` -- test_the_consolidation_flag_and_its_count_come_from_one_rule
+    # keeps those three surfaces of one predicate honest for any consumer.
+    assert 'consolidat' not in _rendered_copy(view).lower() and 'licFragOnly' not in view, \
+        "consolidation is back on the Products index -- the owner removed it on 2026-09-18"
 
     # Sortability: every numeric cell in the family table carries a sort key.
     i = view.index('id="licFamilyTable"')
@@ -1628,13 +1704,6 @@ def test_the_family_table_is_one_table_and_every_column_sorts():
         f"{len(re.findall(r'<td[ >]', fam_row))} family cells, "
         f"{len(re.findall(r'<td[ >]', gen_row))} unidentified-row cells")
 
-    # The filter must read the API's flag, never re-derive the threshold client-side.
-    assert 'data-frag=' in view and 'licFragOnly' in view, \
-        "the consolidation filter is gone"
-    js = view[view.index('licFragOnly'):]
-    assert not re.search(r'agencies\s*>=\s*3|>=\s*3\s*&&', js), \
-        "the filter re-derives the threshold in JavaScript — it must read the flag " \
-        "the API computed, or the badge and the filter can disagree"
 
 
 def test_the_consolidation_flag_and_its_count_come_from_one_rule():
@@ -1652,3 +1721,643 @@ def test_the_consolidation_flag_and_its_count_come_from_one_rule():
         "disagree with the badge on the row beside it"
     assert '"consolidation_rule": {"min_agencies": _FAMILY_FRAG_MIN_AGENCIES' in api, \
         "the rule is no longer served, so the page has to hardcode it"
+
+
+# ---------------------------------------------------------------------------
+# The 2026-09-18 product-family rebuild. ⚠⚠ THE WHOLE RESTRUCTURE PASSED ALL 69
+# GUARDS IN THIS FILE UNCHANGED, which is the reason these four exist: every
+# guard here reads the view as a flat string, so a block can move anywhere on
+# the page -- or above the data it interprets -- without one of them seeing it.
+# ---------------------------------------------------------------------------
+
+_FAMILY_VIEW = os.path.join(
+    ROOT, 'app/resources/views/procurement/digital-reform-license-family.blade.php')
+
+
+def test_the_interpretation_layer_sits_below_the_data_it_interprets():
+    """The analyst bands render AFTER the City's records, not above them.
+
+    ⚠⚠ The page used to open with four analyst boxes -- the summary, the purchase
+    class and its mix table, build-vs-buy, and the merged spellings -- plus the
+    open-source table, so the first figure about City spend sat ~1,850px down at
+    1440 and a reader met five interpretations before one measurement.
+
+    ⚠ This is an ORDER assertion and it has to be, because every other guard in
+    this file reads the template as an unordered string: the entire restructure
+    passed all 69 of them without a single edit. Position is exactly the property
+    none of them can see.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    body = _php_code(view)
+
+    records = body.index('id="section-records"')
+    classification = body.index('id="section-classification"')
+    assert records < classification, \
+        "the classification band moved back above the City's records"
+
+    # And the pieces inside it, individually -- a band can be in the right place
+    # while a box inside it drifts back to the top.
+    tiles = body.index('db-stat-grid')
+    for needle, what in (
+        ('What kind of purchase is this', 'the purchase-class box'),
+        ('Could the City build this itself?', 'the build-vs-buy box'),
+        ('Bought under these names', 'the merged-spellings block'),
+        ('What the contracts themselves say it is for', 'the recorded purposes'),
+    ):
+        assert body.index(needle) > tiles, \
+            f"{what} is above the stat tiles again"
+
+
+def test_the_page_and_the_index_cannot_give_two_seller_counts():
+    """"Who sells it" is the merged list, through the one owner.
+
+    ⚠⚠ THE DEFECT: this heading counted the family's CONTRACT vendors only --
+    Microsoft read 6 -- while the index's "Bought through" cell for the same
+    family read 32 (6 contract + 26 notice-only), because that column merges the
+    City Record awarded-to names through modules/resellers. Both figures were
+    right about their own question and nothing on either page said which question
+    it was answering.
+
+    Pinned at BOTH ends: the API must run the same merge for the family payload,
+    and the view must render the served result rather than counting `vendors`.
+    """
+    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
+    fn = api[api.index('async def family(slug: str):'):api.index('@router.get("/capability/{cap}")')]
+    assert 'resellers.merge(' in fn, \
+        "the family endpoint no longer merges through modules/resellers, so it can " \
+        "disagree with the index again"
+    assert '"sellers": sellers' in fn, "the merged rollup is no longer served"
+
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    code = _php_code(view)
+    assert "$fam['sellers']" in code, "the view stopped reading the served merge"
+    # The visible count must come from the merge, never from count($vendors) --
+    # that is the 6-against-32 defect written back in.
+    assert '$sellerTotal' in code and "$sellers['total']" in code, \
+        "the seller total is no longer taken from the merge's own count"
+
+
+def test_the_folded_calendar_still_discloses_every_bucket():
+    """Folding "When these end" into the contracts table kept all three buckets.
+
+    ⚠ The standalone three-row table was 1,400px from the contracts it described
+    and said nothing the rows could not. It is a sentence above the table now --
+    but the property it carried is load-bearing and survives: a calendar that
+    silently drops rows reads as the whole inventory, which is how a table summing
+    262 contracts once sat under a tile reading 948.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    copy = _rendered_copy(view)
+    # ⚠ The fragment, not the whole clause: the template composes
+    # "{{ ... ? 'contract ends' : 'contracts end' }} in a future year", so the
+    # singular/plural half is never contiguous with the rest. The first draft of
+    # this assertion asked for the whole sentence and failed on correct code --
+    # the expectation was wrong, not the view.
+    assert 'in a future year' in copy, \
+        "the folded calendar no longer says how many contracts end in future years"
+    assert 'already ended' in copy, \
+        "the folded calendar no longer discloses contracts that have already ended"
+    assert 'no usable end date' in copy, \
+        "the folded calendar no longer discloses contracts with no usable end date"
+
+    code = _php_code(view)
+    for var, what in (('$endedCount', 'the ended bucket'),
+                      ('$noEndDate', 'the no-end-date bucket'),
+                      ('$futureCount', 'the future-years bucket')):
+        assert var in code, f"{what} is no longer computed, so the sentence cannot state it"
+
+
+def test_the_reviewed_share_on_a_family_page_is_computed_never_typed():
+    """⚠⚠ THE TYPED FIGURE WAS STILL LIVE HERE, AND _reviewed()'s OWN DOCSTRING
+    NAMES IT. The sentence "Only the largest 20 product families - 88.0% of the
+    value in this analysis - have been reviewed by hand so far" was template text
+    in the class-tier block, rendered on every family whose class was not curated.
+    `_reviewed()` was written to remove exactly that sentence; it was applied to
+    the INDEX and never swept to this view, which is the one-file-one-measurement
+    defect in its purest form.
+
+    Measured when found (2026-09-18): the top 20 families are 76.0% of value and
+    the curated class seed covers 99 families carrying 90.6%. Wrong in both
+    halves, beside figures the same page computes.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    copy = _rendered_copy(view)
+    typed = re.findall(r'\b\d{1,3}\.\d%', copy)
+    assert not typed, \
+        f"a typed percentage is back in the family page's copy: {typed}"
+
+    code = _php_code(view)
+    assert "$fam['reviewed']" in code, \
+        "the reviewed share is no longer read from the payload, so it cannot be computed"
+    assert '$reviewedLine' in code, "the computed sentence is gone"
+
+    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
+    fn = api[api.index('async def family(slug: str):'):api.index('@router.get("/capability/{cap}")')]
+    assert '_reviewed(' in fn and '"reviewed": reviewed' in fn, \
+        "the family endpoint no longer computes the reviewed share through _reviewed()"
+
+
+def test_the_peers_band_never_renders_the_abstention_bucket():
+    """⚠⚠ `other` IS AN ABSTENTION, NOT A FUNCTION, and this was measured before
+    it shipped rather than after. LexisNexis carries `capability = other`, so a
+    naive "products sharing this function" band offered it **155 peers**, led by
+    a call-centre managed service, a research subscription and a traffic-data
+    feed. Those share no function with legal research or with each other; what
+    they share is that the classifier declined to name one.
+
+    A family that abstains gets no band. We cannot say what else does a job we
+    have not identified, and a confident wrong list of 155 products is far worse
+    than the omission -- this is the `_OTHER_CAPABILITY` sentinel's whole reason
+    for existing, applied at a new surface.
+    """
+    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
+    fn = api[api.index('async def family(slug: str):'):api.index('@router.get("/capability/{cap}")')]
+    peers_block = fn[fn.index('peers, peers_total = [], 0'):fn.index('notice_res, _res_meta')]
+    assert '_OTHER_CAPABILITY' in peers_block, \
+        "the peers band no longer excludes the abstention bucket, so a family whose " \
+        "function was never identified will be given peers that share nothing with it"
+
+
+def test_peers_are_derived_from_our_own_rows_and_counted_before_the_cap():
+    """The band is DERIVED, and its total is measured on the unsliced set.
+
+    ⚠ Derived matters: a shared function tag is our own data, so this band makes
+    no claim a seed would have to carry. It is the one alternatives band that is
+    a measurement rather than a suggestion.
+    ⚠ Counted before the cap, for the reason `by_vendor` already paid for: 25 of
+    88 rows under a heading implying all of them.
+    """
+    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
+    fn = api[api.index('async def family(slug: str):'):api.index('@router.get("/capability/{cap}")')]
+    peers_block = fn[fn.index('peers, peers_total = [], 0'):fn.index('notice_res, _res_meta')]
+
+    assert '_agg(peer_rows, "family")' in peers_block, \
+        "peers no longer aggregate the same rows the capability page does, so the two " \
+        "pages can now disagree about one function"
+    assert 'a["key"] != name' in peers_block, \
+        "the family is no longer excluded from its own peer list"
+    # ⚠ The count must be taken from `others` BEFORE the [:10], not from `peers`.
+    total_line = [l for l in peers_block.split('\n') if 'peers_total =' in l and 'peers_total = len' in l]
+    assert total_line and 'len(others)' in total_line[0], \
+        "peers_total is no longer measured on the unsliced set"
+    assert 'peers = sorted(others' in peers_block and '[:10]' in peers_block, \
+        "the display cap moved or disappeared; the count and the cap must stay separate"
+
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    code = _php_code(view)
+    assert "$fam['peers']" in code and "$fam['peers_total']" in code, \
+        "the view no longer reads the served peers and their full count"
+    # ⚠ WHITESPACE-NORMALISED, because the template wraps its prose at ~80 columns
+    # and a multi-word phrase is almost never contiguous in the source. The first
+    # draft of the caveat assertion below failed on correct copy for exactly that
+    # reason -- the expectation was wrong, not the page.
+    copy = re.sub(r'\s+', ' ', _rendered_copy(view))
+    # ⚠ DESCRIPTIVE, never "alternatives to this". A peer can be the SAME vendor's
+    # separate family -- Citrix's own list leads with Citrix Virtual Apps and
+    # Citrix Workspace, which the family merge has not joined up -- so claiming
+    # they replace it would be nonsense. "What else the City buys for this job" is
+    # true in every case.
+    assert 'What else the City buys for this job' in copy, \
+        "the peers heading changed; if it now claims replacement, check it against " \
+        "the same-vendor case before accepting it"
+    assert 'not proof that one could replace another' in copy, \
+        "the peers band no longer says a shared function is not proof of substitutability"
+
+
+_MAKER_SEED = os.path.join(ROOT, 'api/seed/license_family_maker.csv')
+
+
+def _maker_rows():
+    with open(_MAKER_SEED, newline='', encoding='utf-8') as fh:
+        lines = [ln for ln in fh if not ln.lstrip().startswith('#')]
+    return [r for r in csv.DictReader(lines) if (r.get('family') or '').strip()]
+
+
+def test_the_maker_seed_is_well_formed_and_every_claim_carries_a_source():
+    """Who makes a product is a claim about a NAMED COMPANY, so it is sourced.
+
+    ⚠⚠ AND THE SOURCE MUST BE A STABLE URL, NOT A GROUNDING REDIRECT. The AI
+    identity pass (`verify_license_identities.py`) cites
+    vertexaisearch.cloud.google.com/grounding-api-redirect/... links, and
+    measured 2026-09-18 EVERY ONE OF THEM NOW RETURNS 404. Those citations are
+    dead, in a document written to be checkable. A citation that expires is worse
+    than no citation, because it reads as evidence until someone clicks it.
+    Cite the maker's own canonical site, a regulator's filing, or a stable
+    encyclopaedia entry -- something that will still resolve next year.
+    """
+    rows = _maker_rows()
+    assert len(rows) >= 20, f"the maker seed shrank to {len(rows)} rows"
+    seen = set()
+    for r in rows:
+        fam = r['family'].strip()
+        assert fam not in seen, f"{fam} appears twice in the maker seed"
+        seen.add(fam)
+        assert r.get('maker', '').strip(), f"{fam} has no maker"
+        assert r.get('source_url', '').strip(), f"{fam}'s maker has no source"
+        assert r.get('as_of', '').strip(), f"{fam}'s maker has no as-of date"
+        assert 'vertexaisearch' not in r['source_url'], (
+            f"{fam} cites a Google grounding redirect, which expires -- measured "
+            "2026-09-18, every such link in docs/license-identity-review.md is 404")
+        assert r['source_url'].startswith('http'), f"{fam}'s source is not a URL"
+        assert r.get('maker_kind', 'company').strip() in (
+            'company', 'service-provider', 'bundle'), \
+            f"{fam} has an unknown maker_kind {r.get('maker_kind')!r}"
+        vid = (r.get('maker_vendor_id') or '').strip()
+        assert vid == '' or vid.isdigit(), \
+            f"{fam}'s maker_vendor_id {vid!r} is not a PASSPort supplier id"
+
+
+def test_a_maker_is_only_rendered_when_it_was_curated():
+    """⚠⚠ NO AUTOMATIC TIER, and the table has no `tier` column so there cannot
+    be one. Every other claim on a family page describes a CONTRACT; this one
+    names a COMPANY. An absent row renders "Maker not yet identified", which is
+    the correct state for 794 of the 814 families and is not a bug to fix by
+    guessing from the vendor name -- the vendor is usually a reseller, which is
+    the whole reason this card exists.
+    """
+    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
+    fn = api[api.index('async def family(slug: str):'):api.index('@router.get("/capability/{cap}")')]
+    # ⚠ RE-EXPRESSED 2026-09-18, never relaxed. This pinned the literal
+    # `"maker": (data.get("makers") or {}).get(name)`, which was hoisted into
+    # `maker_row` when the same-maker cross-reference needed it earlier in the
+    # function. The property is unchanged -- the maker comes from the curated
+    # `makers` map, keyed on this family's name -- so the guard follows it to the
+    # assignment rather than being deleted.
+    assert 'maker_row = (data.get("makers") or {}).get(name)' in fn, \
+        "the maker is no longer resolved from the curated map by family name"
+    assert '"maker": maker_row' in fn, \
+        "the resolved maker is no longer what the payload serves"
+
+    builder = open(os.path.join(ROOT, 'api/build_license_procurement.py'),
+                   encoding='utf-8').read()
+    ddl = builder[builder.index('DDL = """'):builder.index('def norm(')]
+    maker_ddl = ddl[ddl.index('CREATE TABLE IF NOT EXISTS license_family_maker'):]
+    maker_ddl = maker_ddl[:maker_ddl.index(');')]
+    assert 'tier' not in maker_ddl, \
+        "license_family_maker grew a tier column -- an automatic maker must not be " \
+        "possible, because a wrong claim about a named company is the harmful direction"
+
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    copy = re.sub(r'\s+', ' ', _rendered_copy(view))
+    assert 'Maker not yet identified' in copy, \
+        "the honest empty state is gone, so an unresearched family now shows nothing " \
+        "at all where it should say we have not looked"
+
+
+def test_the_maker_card_never_publishes_a_locally_filed_role_as_a_corporate_one():
+    """⚠⚠ FOUND ONLY BY LOOKING AT THE RENDERED PAGE. The first build hydrated
+    the card with Local Law 34 principal officers, and Microsoft's filing lists
+    "DANA BARNES - Chief Executive Officer" and "JAMIE HARPER - Chief Executive
+    Officer" beside two Chief Financial Officers. Those are roles as FILED by
+    whoever registered the company to do business with the City -- regional or
+    divisional officers -- not the corporation's officers. Under a heading
+    reading "Who makes it" they tell a reader that Microsoft's chief executive is
+    Dana Barnes, which is false.
+
+    ⭐ The fix is a FRAME, not a deletion: the vendor profile still shows every
+    one of them, where the LL34 context is explicit and the claim is about a City
+    filing rather than about the company. The card links there and says so. A
+    fact that is true in one frame and false in another belongs in the frame that
+    makes it true.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    code = _php_code(view)
+    maker_block = code[code.index("$maker = $fam['maker']"):code.index('$peers =')]
+    # ⚠ THE COPY, NOT THE RAW VIEW. The first draft scanned `view` and fired on
+    # the comment ABOVE the fix, which quotes "Chief Executive Officer" to explain
+    # why it must not render. That is this repo's own-prose guard trap, and it has
+    # now been paid for in a new organ. A scanner that reads an explanation as the
+    # thing it explains reports a problem that is not there.
+    assert 'Chief Executive' not in _rendered_copy(view), \
+        "a corporate role title is being rendered on the family page again"
+    assert "'Principal officer'" not in maker_block, \
+        "the maker card is selecting LL34 principal officers again -- those roles are " \
+        "filed for City business and are not the corporation's officers"
+
+    copy = re.sub(r'\s+', ' ', _rendered_copy(view))
+    assert 'where the roles carry the filing' in copy, \
+        "the card no longer sends the reader to the frame where those roles are true"
+
+
+def test_the_product_list_is_derived_and_every_row_says_how_we_know_it():
+    """⭐ NO SEED. The owner asked which individual products the City is likely
+    buying under a family name, and the answer was already in the data, filed as
+    something else: the merged contract SPELLINGS. Citrix's are `Citrix
+    NetScaler` and `Citrix ShareFile`, Broadcom's are `CA Erwin` and `CA-IDMS`,
+    Axon's are `Axon Evidence` and `Axon Body Camera System`. Those are products,
+    named by the City on its own contracts, and they were rendered at the foot of
+    the page as evidence that a MERGE was correct rather than as the product list
+    they are.
+
+    ⚠ THE GRADES ARE NOT INTERCHANGEABLE and the page must keep them apart. "Named
+    on a contract" is the City's own word for what it bought. "Observed running"
+    is an outside audit's inference about a public host -- a different claim,
+    which cannot be priced, and which therefore carries an observation count and
+    no money.
+    ⚠ A spelling equal to the family name is not a product: listing "Microsoft"
+    as a product of Microsoft is noise, and it would put a row on all 551
+    single-product families that says nothing.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    code = _php_code(view)
+    block = code[code.index('$prodRows = [];'):code.index('$hasProductList')]
+
+    assert "strcasecmp($pn, $famName) === 0" in block, \
+        "a spelling equal to the family name is being listed as a product of itself"
+    assert "$webEstate['components']" in block, \
+        "the observed half no longer comes from the web-estate feed"
+    # ⚠ The two sources agreeing is not two products.
+    # ⚠ THE COMPARISON EXISTING IS NOT THE COMPARISON BEING USED. The first
+    # draft asserted only that `strcasecmp` appeared in the block, and a mutation
+    # replacing `if (!$dup)` with `if (true)` left that line untouched and sailed
+    # through -- a word, not the branch that acts on it. Both halves now.
+    assert 'strcasecmp($k, $wn) === 0' in block, \
+        "the cross-source name comparison is gone"
+    assert 'if (!$dup) { $webProducts[] =' in block, \
+        "the dedup is computed and then ignored, so a product already named on a " \
+        "contract can appear a second time as an observed one"
+
+    copy = re.sub(r'\s+', ' ', _rendered_copy(view))
+    assert 'named on a contract' in copy, "the contract-name grade lost its label"
+    assert 'Detected by an independent scan' in copy, \
+        "the observed rows no longer say they are an outside scan rather than a purchase"
+    assert 'never what was bought or what it cost' in copy, \
+        "the observed rows no longer refuse to be read as spend"
+
+
+def test_the_build_vs_buy_block_is_findable_by_an_element_not_by_its_prose():
+    """⚠⚠ THE HEADLESS CHECK FOR THIS BLOCK WAS BLIND, THEN WRONG, IN ONE SITTING.
+
+    First it searched `innerText` for the block's heading in its authored case.
+    `innerText` returns text AS RENDERED and so applies `text-transform`, and that
+    heading lives in a `.lic-tag`, which is uppercase site-wide -- so the check
+    could never have fired at all. Case-folding it then made it fire on a CORRECT
+    page, because the sentence explaining why the block is absent for a
+    non-software class QUOTES the same question back.
+
+    ⭐ The block carries `id="bvb-rating"` so the check can anchor on the element.
+    Only that form can tell a block from its own explanation. Removing the id
+    silently un-blinds nothing and re-blinds the verifier, so it is pinned here.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    assert 'id="bvb-rating"' in view, \
+        "the build-vs-buy block lost its id, so the headless check falls back to " \
+        "matching prose that also appears in the sentence explaining its absence"
+    verifier = open(os.path.join(ROOT, 'scripts/headless/verify_family_page.py'),
+                    encoding='utf-8').read()
+    assert 'query_selector("#bvb-rating")' in verifier, \
+        "the headless check went back to scanning text for this block"
+
+
+def test_the_product_table_discloses_the_contracts_it_cannot_place():
+    """⚠⚠ A SUBSET TABLE UNDER A TOTAL TILE READS AS THE WHOLE INVENTORY.
+
+    The product rows are a subset BY CONSTRUCTION: a contract recorded under the
+    family name alone names no product and so has no row. Measured, that is not a
+    rounding difference -- Citrix shows 6 of 15 contracts above the line, leaving
+    9 ($798K) unplaced, while the tile beside it reads 15.
+
+    This is the same rule as the folded calendar three bands below and the capped
+    notice panel further down, and it is the defect that once summed 262
+    contracts under a tile reading 948: count before you cap, then SAY what is
+    missing.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    code = _php_code(view)
+    assert '$prodUnnamed' in code and '$prodUnnamedValue' in code, \
+        "the product table no longer measures the contracts it cannot place"
+    # ⚠ Derived by SUBTRACTION from the family's own totals, never recounted --
+    # two independent definitions of "contracts in this family" is how one page
+    # came to have two answers for one number.
+    assert "$prodUnnamed = (int) ($sum['contracts'] ?? 0) - $prodNamed" in code, \
+        "the remainder is recounted instead of subtracted, so it can now disagree " \
+        "with the tile above it"
+    copy = re.sub(r'\s+', ' ', _rendered_copy(view))
+    # ⚠⚠ A PHRASE UNIQUE TO THE REMAINDER BRANCH. The first draft asserted
+    # "recorded under the family name alone", which ALSO appears in the sibling
+    # @else branch that runs when NO contract names a product -- so a mutation
+    # gutting the remainder sentence landed and the guard passed, satisfied by
+    # its neighbour. "A guard that searches a region is satisfied by a sibling",
+    # one more time.
+    assert 'contracts name a product above' in copy, \
+        "the product table stopped saying how many of the family's contracts it places"
+    assert 'recorded under the family name alone' in copy, \
+        "the product table stopped naming what it leaves out"
+
+
+def test_the_compact_analysis_tag_keeps_the_caveat_on_its_face():
+    """The owner asked for the Analysis banner to be more subtle on the family page
+    (2026-09-18): a tag that shows the full message on hover. ⚠⚠ THAT IS A
+    DISCLOSURE, AND THIS REPO'S RULE IS THAT A CAVEAT IS NEVER BEHIND A CLICK. The
+    tag is allowed for exactly the reason the capital profile's money note was:
+    the part a reader must not miss is on the tag's FACE, and only the explanatory
+    paragraph opens. If the summary ever stops warning, the exception has quietly
+    become the defect the rule exists to prevent.
+
+    ⚠ A <details>, not a hover-only tooltip -- hover does not exist on a phone.
+    """
+    tag = open(os.path.join(ROOT, 'app/resources/views/sub/analysis-tag.blade.php'),
+               encoding='utf-8').read()
+    body = re.sub(r'\{\{--.*?--\}\}', '', tag, flags=re.S)
+    m = re.search(r'<summary>(.*?)</summary>', body, re.S)
+    assert m, "the tag is no longer a <details> with a <summary>, so a phone cannot open it"
+    face = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', m.group(1)))
+    assert 'not official determinations' in face, \
+        "the caveat left the tag's visible face -- it is now only behind a hover, which " \
+        "is the exact thing the caveat rule forbids"
+    assert 'prompts to investigate' in face, "the tag's face no longer says what to do with the signals"
+    full = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', body))
+    assert 'interpretation layer' in full and 'build-vs-buy' in full, \
+        "the full banner sentence is no longer carried in the disclosure body"
+
+
+def test_no_caveat_on_the_family_page_sits_behind_a_disclosure():
+    """⚠⚠ THE RULE THE 2026-09-18 TIDY-UP WORKED RIGHT NEXT TO. The owner asked for
+    the page's grey method paragraphs to collapse behind disclosures. Enumerating
+    them first showed that MOST OF THEM ARE CAVEATS, not method notes: "a mention
+    is not a purchase", "a shared function is not proof that one could replace
+    another", "never what was bought or what it cost", the product table's
+    remainder, the notice panel's cap. Each is a sentence that stops a reader
+    misusing a figure, and this codebase's rule -- paid for on the capital project
+    page -- is that such a sentence is never behind a click.
+
+    So the caveats were made COMPACT (`lic-caveat`, one indented line) and only
+    genuine provenance went into `<details class="lic-method">`. This guard is
+    what keeps that split honest: it fails the moment a caveat phrase moves inside
+    a disclosure.
+
+    ⚠ It also forbids the faint-text half of the original rule by construction:
+    `lic-caveat` is its own class, so a caveat cannot be silently restyled to
+    whatever `lic-sub` becomes.
+    """
+    view = _rendered_copy(open(_FAMILY_VIEW, encoding='utf-8').read())
+    # ⚠⚠ BALANCE FIRST, AND IT IS THIS GUARD'S OWN BLIND SPOT. The span below runs
+    # from `<details` to the next `</details>`, so an UNCLOSED disclosure is
+    # invisible to it -- found while mutation-testing, where a deliberately
+    # unbalanced injection hid a caveat and nothing fired. An unbalanced count is
+    # also a real rendering bug that `php -l` and the Blade compiler both accept,
+    # so asserting it costs nothing and closes the hole.
+    assert view.count('<details') == view.count('</details>'), \
+        "unbalanced <details> in the family view: the markup is broken, and it " \
+        "also blinds the caveat scan below"
+    hidden = []
+    for m in re.finditer(r'<details\b.*?</details>', view, flags=re.S):
+        hidden.append(re.sub(r'\s+', ' ', m.group(0)))
+    blob = ' '.join(hidden)
+    for phrase in (
+        'A mention is not a purchase',
+        'not proof that one could replace another',
+        'never what was bought or what it cost',
+        'recorded under the family name alone',
+        'Suggestions, not recommendations',
+        'already ended',
+        'two models agreed',
+    ):
+        assert phrase not in blob, \
+            f"a caveat moved behind a disclosure: {phrase!r}. Compact it instead -- " \
+            "a caveat behind a triangle is a caveat nobody reads"
+
+
+def test_the_page_has_one_card_treatment():
+    """⚠ THREE SHAPES FOR "A BOX OF CONTENT" made the page read as three pages
+    stapled together: a navy left-border block for prose, a bordered white card
+    for tables, and an orange left-border block for the rating. Everything is
+    `lic-card` now -- the same surface, border and radius `db-table-wrap` already
+    used -- with `is-brandwash` as the single accent variant.
+    """
+    view = open(_FAMILY_VIEW, encoding='utf-8').read()
+    body = _rendered_copy(view)
+    for dead in ('class="lic-summary', 'class="lic-note'):
+        assert dead not in body, \
+            f"{dead}\" is back: the page has more than one card treatment again"
+    css = open(os.path.join(ROOT, 'app/resources/views/procurement/'
+                                  'digital-reform-license-family.blade.php'),
+               encoding='utf-8').read()
+    assert '.lic-card {' in css, "the one card treatment is gone"
+    # ⚠ Pinned against db-table-wrap's own values: if the two drift, a prose card
+    # and the table beside it stop looking like one family, which is the defect.
+    assert 'background: var(--db-bg); border: 1px solid var(--db-border);' in css, \
+        "lic-card no longer matches db-table-wrap's surface and border"
+
+
+def test_other_families_by_the_same_maker_are_linked_and_never_summed():
+    """⭐ THE CROSS-REFERENCE, AND THE LINE IT MUST NOT CROSS. The maker seed
+    already knew Casebuilder and SoundThinking (ShotSpotter) are one company, and
+    that AT&T Vehicle Tracking runs on the platform the City's separate Geotab
+    contracts buy. Each page stated its own half and neither pointed at the other.
+
+    ⚠⚠ IT IS A LINK, NEVER A MERGE. These families stay separate deliberately --
+    merging would assert one product identity the contract data does not carry --
+    so nothing may add their values together. The row says so on the page, because
+    two figures side by side invite exactly that arithmetic.
+    """
+    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
+    fn = api[api.index('async def family(slug: str):'):api.index('@router.get("/capability/{cap}")')]
+    blk = fn[fn.index('same_maker = []'):fn.index('notice_res, _res_meta')]
+    assert 'maker_row.get("maker")' in blk and 'other_row.get("maker")' in blk, \
+        "same_maker no longer keys on the curated maker string"
+    assert 'if other_fam == name' in blk, "a family is listed as its own sibling"
+    # ⚠ Each sibling carries its OWN maker_kind: AT&T Vehicle Tracking is a
+    # `bundle` on Geotab's product while Geotab is the `company`, and one shared
+    # label reads wrong on one of the two.
+    assert '"maker_kind": other_row.get("maker_kind")' in blk, \
+        "the sibling's own maker_kind is gone, so a bundle and its maker read alike"
+
+    copy = re.sub(r'\s+', ' ', _rendered_copy(open(_FAMILY_VIEW, encoding='utf-8').read()))
+    assert 'nothing here adds them together' in copy, \
+        "the cross-reference stopped saying the two figures must not be summed"
+
+
+def test_the_table_page_size_is_smaller_on_a_phone_and_read_once():
+    """⚠ Measured: the product family page was 15,246px at 390 with ten rows a
+    page and 13,262 with five -- the four paginated tables were most of the
+    difference, because every row wraps to several lines at that width.
+
+    ⚠⚠ READ ONCE, AT LOAD. DataTables fixes `pageLength` at init, so a value that
+    tracked the viewport would leave a rotated phone showing a page length its
+    own pager disagrees with. And it stays in the ONE owner -- two copies of a
+    page size is how 25/25/25 drifted.
+    """
+    js = open(os.path.join(ROOT, 'app/public/js/db-tables.js'), encoding='utf-8').read()
+    decl = [l for l in js.split('\n') if l.startswith('window.DB_TABLE_PAGE')]
+    assert len(decl) == 1, f"the page size has {len(decl)} declaration sites again"
+    assert 'matchMedia' in decl[0] and '? 5 : 10' in decl[0], \
+        "the phone page size is gone, or is no longer 5 against 10"
+    assert '767.98px' in decl[0], \
+        "the breakpoint drifted from Bootstrap's md, which the layout's col-md-* " \
+        "and the contents sidebar's d-none d-md-block both use"
+    assert 'addEventListener' not in decl[0] and 'resize' not in decl[0], \
+        "the page size reacts to resize, which DataTables cannot honour after init"
+
+
+_INDEX_VIEW = os.path.join(
+    ROOT, 'app/resources/views/procurement/digital-reform-licenses.blade.php')
+
+
+def test_the_products_index_leads_with_the_family_table():
+    """⭐ THE OWNER'S REFRAME (2026-09-18): the page was built for software licences
+    and matured into products, so Product families is the spine and everything
+    else supports it. Measured before: 9,133px tall with the family table
+    starting at 5,052px -- 55% of the way down, after two charts, the class
+    table, the function table and 950px of open-source alternatives.
+
+    ⚠ An ORDER assertion, because every other guard on this view reads it as a
+    flat string and would let the table drift back under the charts without a
+    murmur -- the same blindness the family page's restructure exposed.
+    """
+    body = _php_code(open(_INDEX_VIEW, encoding='utf-8').read())
+    fam = body.index('id="families"')
+    for later, what in (('id="classes"', 'the class table'), ('id="functions"', 'the function table'),
+                        ('id="routes"', 'the routes table'), ('id="agencies"', 'agencies and vendors'),
+                        ('id="licenses"', 'the software-licences section'),
+                        ('id="spending"', 'the awarded-vs-paid charts'),
+                        ('id="open-source"', 'the link to the open-source page')):
+        assert body.index(later) > fam, f"{what} renders above the family table again"
+    assert body.index('id="licenses"') > body.index('id="agencies"'), \
+        "the software-licences section moved above the four lenses"
+    assert body.index('id="spending"') > body.index('id="licenses"'), \
+        "the charts left the software-licences section"
+    # ⚠ OWNER, 2026-09-23: the open-source alternatives have their OWN page, linked
+    # from directly under the family table (as Contracts links the queue). The
+    # link is the next block after the table; the bands are not on this page.
+    assert fam < body.index('id="open-source"') < body.index('id="classes"'), \
+        "the open-source link is no longer directly under the family table"
+    assert "route('research.digital-reform.open-source')" in body
+    assert "@include('procurement.partials.open-source-alternatives')" not in body and \
+           'Reviewed, with a named alternative' not in body, \
+        "the open-source bands are back on the Products page"
+    osp = open(os.path.join(os.path.dirname(_INDEX_VIEW), 'digital-reform-open-source.blade.php'),
+               encoding='utf-8').read()
+    assert "@include('procurement.partials.open-source-alternatives')" in osp
+
+
+def test_the_family_table_carries_kind_and_function_from_served_data():
+    """The three new columns are properties of a family, never a second rule.
+
+    ⚠ KIND and FUNCTION come from the endpoint (`purchase_class`, `capability`,
+    `capability_label`), read off the same `classes` map the class and function
+    tables aggregate -- so a row and its lens cannot disagree. The label is
+    SERVED, because a capability label map has been stale in three views at once.
+    ⚠ RETIRED 2026-09-18: an open-source badge column derived from `$lic['oss']`
+    was here for a few hours and the owner removed it. The open-source section
+    itself stays; the table no longer carries a per-row badge for it.
+    ⚠ `other` is the classifier's abstention and must not become a function LINK:
+    the capability page for `other` would list 155 unrelated products.
+    """
+    api = open(os.path.join(ROOT, 'api/routers/licenses.py'), encoding='utf-8').read()
+    fn = api[api.index('async def licenses():'):api.index('def _capability_rollup')]
+    assert 'f["purchase_class"] = fc.get("class", "")' in fn, "kind is no longer served per family"
+    assert 'f["capability_label"] = ' in fn and 'cap_labels.get(cap, cap)' in fn, \
+        "the function label is no longer served from the vocabulary seed"
+    assert 'classes_map.get(f["key"])' in fn, "kind no longer reads the same classes map the lenses aggregate"
+
+    view = open(_INDEX_VIEW, encoding='utf-8').read()
+    code = _php_code(view)
+    assert "$f['capability'] !== 'other'" in code, \
+        "the function cell links the abstention bucket -- that page lists 155 unrelated products"
+    assert "?class={{ urlencode($f['purchase_class']) }}" in code, \
+        "the kind cell no longer links to the class drill-down"
+    # ⚠ The seller column keeps the merged total as its sort key and its number.
+    assert 'data-order="{{ (int) ($res[\'total\'] ?? 0) }}"' in code and \
+           "number_format((int) ($res['total'] ?? 0))" in code, \
+        "the Sellers column no longer shows and sorts on the merged total"

@@ -3,8 +3,41 @@ name: CI
 on:
   push:
     branches: [main]
+    # ⚠ WRITTEN OUT TWICE ON PURPOSE — DO NOT "TIDY" THIS INTO A YAML ANCHOR.
+    # GitHub's workflow parser does not support anchors/aliases, so `&docs_only`
+    # / `*docs_only` is valid YAML that GitHub rejects. The duplication is pinned
+    # by api/tests/test_ci_paths_ignore.py so the two lists cannot drift.
+    paths-ignore:
+      # ⚠⚠ DOCS-ONLY CHANGES DO NOT NEED A DOCKER BUILD. Added 2026-08-26 after
+      # the repo exhausted its Actions allowance mid-month: measured 293 runs in
+      # August at ~5.1 min wall each, and because three jobs run in parallel the
+      # billed total lands around 3,300-4,500 minutes against the 2,000 included
+      # on `wegovnyc`'s FREE plan. On one day alone, 4 of 6 PRs were docs- or
+      # handoff-only and every one of them still built images and booted the full
+      # stack.
+      #
+      # ⚠ GitHub skips the run only when EVERY changed file matches, so a PR
+      # touching code *and* docs still runs in full. That is the property that
+      # makes this safe rather than a coverage hole — and the #280 lesson ("a job
+      # you always see skipping is not coverage") is why the list stays this
+      # narrow: prose and planning notes, nothing that can change behaviour.
+      #
+      # ⚠ Safe here specifically because this repo has NO required status checks
+      # (branch protection needs Pro/Team; `wegovnyc` is on Free). If the repo
+      # moves to the `sarapis` org and gains branch protection, revisit: a
+      # REQUIRED check that never runs leaves a PR unmergeable forever.
+      - 'docs/**'
+      - 'handoffs/**'
+      - '**.md'
+      - 'LICENSE'
   pull_request:
     branches: [main]
+    # Must stay identical to the push list above — guard-pinned.
+    paths-ignore:
+      - 'docs/**'
+      - 'handoffs/**'
+      - '**.md'
+      - 'LICENSE'
   workflow_dispatch:   # allow manually running prod-smoke on demand
 
 jobs:
@@ -38,22 +71,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         # No submodules needed — this smoke builds only api/app/nginx/postgres/redis
-        # (normalizer & newsletter are separate private submodules).
+        # (normalizer-py is a separate private submodule).
       - name: Stub gitignored config the stack needs (CI only)
         run: |
           # api/env.yaml is gitignored (holds real creds); without it the bind
           # mount becomes a directory and the api crashes. Use the committed
           # non-secret CI fixture (db creds match the compose postgres defaults).
           cp api/env.ci.yaml api/env.yaml
-          # newsletter service (private submodule, not started here) declares an
-          # env_file compose still validates — stub it.
-          mkdir -p databook_newsletter/repo && touch databook_newsletter/repo/.env
           # Production splits Postgres into least-privilege roles, so the compose
           # file demands the per-role usernames explicitly rather than defaulting
           # to the superuser. Compose interpolates the BASE file before merging
           # docker-compose.local.yml, so an override cannot supply these — they
           # have to exist as variables. Mirrors .env.example.
           cp .env.example .env
+          # ⚠⚠ THE APP HAS THE SAME TRAP AS api/env.yaml ABOVE, AND NOBODY
+          # APPLIED IT. docker-compose.yml bind-mounts ./app/.env, which is
+          # gitignored, so without this Docker creates a DIRECTORY at
+          # /var/www/.env and Laravel cannot read its config. Measured
+          # 2026-09-09: all 68 page families returned 500 in CI, including
+          # /about and /styleguide which need no data — the frontend had never
+          # rendered here, and the smoke printed its status without asserting
+          # it.
+          #
+          # ⚠ .env.example, never .env.default — sync-public.sh excludes the
+          # latter because it "carried a live APP_KEY and Carto key".
+          cp app/.env.example app/.env
+          # ⚠ Its APP_KEY is BLANK (spaces and a comment), which 500s Laravel on
+          # its own with "No application encryption key has been specified". A
+          # fresh random key per run, read at RUNTIME from the bind-mounted
+          # app/.env (the image carries no .env and caches no config) — and so
+          # nothing key-shaped is committed to the workflow.
+          sed -i "s|^APP_KEY=.*|APP_KEY=base64:$(head -c 32 /dev/urandom | base64)|" app/.env
+          # APP_URL drives asset() and would otherwise point this stack's assets
+          # at staging.databook.nyc — the documented throwaway-container trap.
+          sed -i "s|^APP_URL=.*|APP_URL=http://localhost:8580|" app/.env
       - name: Build + boot stack (local compose override)
         run: |
           docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis api app nginx
@@ -75,6 +126,35 @@ jobs:
           test "$(code http://localhost:8581/docs)"   = "200"
           # NOTE: data-dependent endpoints aren't asserted here — no seed loaded.
           # Load a fixture (scripts/make-local-seed.sh output) to extend this.
+      - name: Frontend page families (baseline diff, needs no seed)
+        run: |
+          set -e
+          # Every page family web.php routes, swept and compared against a
+          # committed baseline. It is a DIFF, not a list of expected 200s:
+          # on this empty database a page that 500s from missing data is
+          # byte-identical to one broken by a code change, so the assertion is
+          # "nothing moved" rather than "everything is 200".
+          #
+          # This is the check that makes the Laravel 13 / PHP 8.4 migration in
+          # issue #382 verifiable — a route that stops resolving, a view that
+          # stops compiling or a class that stops loading all move a status.
+          ./scripts/frontend-smoke.sh
+      - name: Blade views compile (needs no seed)
+        run: |
+          set -e
+          # ⚠⚠ `php -l` ON A BLADE FILE PROVES NOTHING — it is valid PHP either
+          # way, so a view that 500s on every request passes it. This COMPILES
+          # all 142 views through the app's own vendored BladeCompiler and lints
+          # the output, which is the only thing that sees a directive glued to a
+          # word character or an `@php` inside a comment pairing with the next
+          # real `@endphp`. Both have shipped a 500 here.
+          # ⚠ The frontend baseline above cannot cover this: a view that fails to
+          # compile 500s, and on this empty database several pages 500 for data
+          # reasons, so "nothing moved" is satisfied by a broken view.
+          # ⚠ `scripts/` is not in the app image (its build context is `app/`),
+          # so the script is copied in rather than exec'd from the repo path.
+          docker compose cp scripts/blade-lint.php app:/tmp/blade-lint.php
+          docker compose exec -T app php /tmp/blade-lint.php
       - name: Federated search SQL parses (needs no seed)
         run: |
           set -e
@@ -126,19 +206,10 @@ jobs:
       - name: Run read-only E2E against prod
         run: BASE_URL=https://databook.nyc npx playwright test
 
-  # ── Job 4: MCP tool audit against prod (schema-drift guard) ──
-  # Calls all 40 MCP tools and fails if any throws. Must run against a
-  # populated instance (prod) — schema-drift errors don't surface on the
-  # empty CI stack. Independent of prod-smoke so flaky Playwright/CF-429 runs
-  # never mask it. See scripts/mcp-tool-audit.py.
-  mcp-tool-audit:
-    name: MCP Tool Audit (prod)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Call every MCP tool and fail on any exception
-        run: MCP_URL=https://api.databook.nyc/mcp python3 scripts/mcp-tool-audit.py
+  # ── Job 4 (MCP tool audit) MOVED to .github/workflows/mcp-tool-audit.yml ──
+  # It lived here gated `if: github.event_name == 'workflow_dispatch'`, so it
+  # printed "skipping" on every PR and had never run on its own — which is how
+  # the MCP server stayed 502 for 16.5 hours on 2026-08-18 with the check that
+  # was written to catch it switched off. It is now a DAILY scheduled workflow
+  # with its own file, and it is not duplicated here: one definition, so a fix
+  # to the audit cannot land in a copy nobody runs.

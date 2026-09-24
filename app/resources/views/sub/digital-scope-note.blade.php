@@ -61,7 +61,7 @@
             agreements still in approval are excluded from every total, including citywide
             purchasing vehicles worth more than some of the totals themselves. They are listed
             separately on the
-            <a href="{{ route('research.digital-reform') }}#pipeline">Overview</a>, as ceilings,
+            <a href="{{ route('research.digital-reform.contracts') }}#awaiting-registration">Contracts page</a>, as ceilings,
             never added in.
         </p>
         <p class="mb-0 mt-2 text-muted" style="font-size: var(--db-text-sm);">

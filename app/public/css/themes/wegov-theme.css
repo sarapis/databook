@@ -32,6 +32,11 @@
   --db-brand-hover: #ef8b64;
   --db-brand-bg:    #fbe9e1;   /* soft terracotta fill */
   --db-brand-wash:  #fdf3ee;
+  /* ⚠ A BRAND MUST SUPPLY ITS OWN -fg. Inheriting Databook's would put a
+     #8f4e00 orange on a terracotta fill. Measured: this theme reproduced the
+     same bug structurally — #e0663a is 2.91:1 on its -bg and 3.14:1 on its
+     -wash, both under AA. #8a3a17 gives 6.61 / 7.13 / 7.78 (bg / wash / white). */
+  --db-brand-fg:    #8a3a17;
 
   /* On-dark tints derived from the new brand */
   --db-on-dark-accent:   #bfe9e2;

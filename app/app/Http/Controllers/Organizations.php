@@ -33,17 +33,25 @@ class Organizations extends Controller
 		}
 		return view('root', [
 			'breadcrumbs' => Breadcrumbs::root(),
-			'tblStatsUrl' => DatabookAPI::url('/get/pstats-records_no/tblname'),
-			'finStatUrls' => [
-				'#projects_no' => DatabookAPI::url("/get/pstats-projects_no/{$date}"),
-				'#orig_cost' => DatabookAPI::url("/get/pstats-orig_cost/{$date}"),
-				'#curr_cost' => DatabookAPI::url("/get/pstats-curr_cost/{$date}"),
-				'#over_budg_am' => DatabookAPI::url("/get/pstats-over_budg_am/{$date}"),
-				'#long_no' => DatabookAPI::url("/get/pstats-long_no/{$date}"),
-				'#over_budg_no' => DatabookAPI::url("/get/pstats-over_budg_no/{$date}"),
-				'#late_start_no' => DatabookAPI::url("/get/pstats-late_start_no/{$date}"),
-				'#late_end_no' => DatabookAPI::url("/get/pstats-late_end_no/{$date}"),
-			],
+			// >> THE HOME CAPITAL CARD IS OFF THE RETIRED SERIES (Phase 4).
+			// `projects_no`/`orig_cost`/`curr_cost` came from `cached_stats`
+			// over `capitalprojectsdollarscomp`, which NYC retired 2023-10-26:
+			// the card published 5,128 projects against the spine's 17,024
+			// tracked / 12,929 in the current plan. Their three hydration URLs
+			// are removed with the tiles - leaving a URL for an id the page no
+			// longer renders is how `loadTableStat` throws on every load.
+			'capital' => DatabookAPI::reqOCE('/get/capital/overview'),
+			// ⚠⚠ THE OTHER FIVE `pstats-*` URLs AND `tblStatsUrl` ARE GONE TOO, and
+			// they were the same defect one step further along: the home page
+			// renders NONE of `over_budg_am`, `long_no`, `over_budg_no`,
+			// `late_start_no`, `late_end_no`, and never reads `tblStatsUrl` at all.
+			// Measured on the rendered page 2026-09-10 — **0 pstats requests, 24 of
+			// 24 tiles hydrated, 0 uncaught JS** — because the loop consuming them
+			// sits inside a `/* */` block. So it was inert, not broken. Deleting it
+			// is still right: this is the section that keeps having to re-establish
+			// which surfaces read the retired series, and dead config naming
+			// `#over_budg_am` on the front page is the most expensive place to
+			// leave that question open.
 			'globStats' => DatabookAPI::reqOCE('/pipeline/globstats') ?: json_decode(file_get_contents(public_path('data/globStats.json')), true),
 			####### seo ########
 			'pagetitle' => "NYC DataBook - Open Data Application for New York City Government Transparency",
@@ -327,6 +335,17 @@ class Organizations extends Controller
 				'url' => ($details['fapireq'] ?? null)
 					? DatabookAPI::url(sprintf($details['fapireq'], $id))
 					: DatabookAPI::url("/get/orgs/section/{$id}/{$details['table']}"),
+				// ⚠ THE CONTROLLER MUST NAME EVERY KEY THE VIEW READS. #247 shipped a
+				// page where the API served three payload keys, the Blade read them and
+				// every unit guard passed — but this array never passed them, and
+				// `$x ?? []` degraded politely, so the section simply did not render.
+				// Only fetching the page found it. `?? ''` here would repeat that, so
+				// the key is always present and the view's fetch is a no-op when the
+				// section has no table of its own.
+				'coverageUrl' => isset($details['table'])
+					? DatabookAPI::url("/get/orgs/section-coverage/{$details['table']}")
+					: '',
+				'contractWorkUrl' => DatabookAPI::url("/get/orgs/contract-work/{$id}"),
 				'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
 				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], self::dispName($org), $section, $ds->list[$section]),
 				'details' => $details,
@@ -629,21 +648,55 @@ class Organizations extends Controller
 				'menu' => $ds->menu,
 				'activeDropDown' => $ds->menuActiveDD($section),
 				'icons' => $ds->socicons,
-				'url' => DatabookAPI::url("/get/orgs/section/{$id}/{$details['table']}"),
+				// ⚠⚠ NOT the generic `/get/orgs/section/{id}/{tbl}` any more. That
+				// endpoint hardcodes the quoted `"wegov-org-id"` column and the spine's
+				// is `wegov_org_id`, so it CANNOT serve `capital_projects` — which is
+				// why this tab was the last surface still on the retired series.
+				'url' => DatabookAPI::url("/get/capital/projects/by-org/{$id}"),
+				// ⚠⚠ THE MAP'S OWN SOURCE, SCOPED THE SAME WAY AS THE TABLE. When this
+				// tab was repointed at the spine (`94e6379`) its map was left reading
+				// `GEO_JSON` off the table — a column the spine does not serve — so it
+				// drew **0 features** while the table held 2,798 projects. Measured on
+				// the rendered page 2026-09-10 from
+				// `map.getSource('route')._data.features.length`, with a clean
+				// container, a loaded style and an empty console: the same class as
+				// this tab's eight blank tiles, found the same way, one organ over.
+				'capGeojsonUrl' => DatabookAPI::url('/get/capital/geojson?' . http_build_query(['org' => $id])),
+				// ⚠ The SAME two keys orgsection passes. This method renders a
+				// DIFFERENT view (orgprojectsection) for the same kind of section, so
+				// adding them to one and not the other is exactly how the first
+				// attempt shipped a scope note that never appeared on /projects.
+				'coverageUrl' => DatabookAPI::url("/get/orgs/section-coverage/{$details['table']}"),
+				'contractWorkUrl' => DatabookAPI::url("/get/orgs/contract-work/{$id}"),
+				// Capital projects carried on ANOTHER agency's budget that name this org.
+				'altProjectsUrl' => DatabookAPI::url("/get/orgs/capital-projects-via/{$id}"),
+				// The CURRENT Capital Commitment Plan. The section's own table is the
+				// series NYC retired in Oct 2023; this is what is happening now.
+				'currentPlanUrl' => DatabookAPI::url("/get/orgs/current-capital-plan/{$id}"),
 				'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
 				'breadcrumbs' => Breadcrumbs::orgSect($org['id'], self::dispName($org), $section, $ds->list[$section]),
 				'details' => $details,
 				'map' => true,
-				'finStatUrls' => [
-					'#projects_no' => DatabookAPI::url("/get/orgs/pstats-projects_no/{$id}/pubdate"),
-					'#orig_cost' => DatabookAPI::url("/get/orgs/pstats-orig_cost/{$id}/pubdate"),
-					'#curr_cost' => DatabookAPI::url("/get/orgs/pstats-curr_cost/{$id}/pubdate"),
-					'#over_budg_am' => DatabookAPI::url("/get/orgs/pstats-over_budg_am/{$id}/pubdate"),
-					'#long_no' => DatabookAPI::url("/get/orgs/pstats-long_no/{$id}/pubdate"),
-					'#over_budg_no' => DatabookAPI::url("/get/orgs/pstats-over_budg_no/{$id}/pubdate"),
-					'#late_start_no' => DatabookAPI::url("/get/orgs/pstats-late_start_no/{$id}/pubdate"),
-					'#late_end_no' => DatabookAPI::url("/get/orgs/pstats-late_end_no/{$id}/pubdate"),
-				],
+				// ⚠⚠ THE EIGHT `pstats-*` HYDRATION URLs ARE GONE, AND THIS TAB'S
+				// TILES WERE BLANK BECAUSE OF THEM. They fetched
+				// `/get/orgs/pstats-{measure}/{id}/{pubdate}` over
+				// `capitalprojectsdollarscomp`, and the only thing that ever called
+				// `loadFinStat()` sat inside the `@if ($details['pubDateFilter'])`
+				// block — which the spine contract turns OFF, deliberately, because a
+				// derived spine has no per-row publication date. So after the tab was
+				// repointed at the spine the loop had no caller: **measured on the
+				// rendered page 2026-09-10, all eight tiles read `&nbsp;` and ZERO
+				// pstats requests were made**, on every org that has spine projects.
+				// The table beside them was correct throughout — which is why a row
+				// count or a status code could not see this.
+				// ⚠ The tiles are SERVER-RENDERED from the spine now, exactly as the
+				// district tab's are (`distprojectsection`), so there is nothing left
+				// to hydrate and no unit to re-scale.
+				'capital' => DatabookAPI::reqOCE("/get/capital/stats/org/{$id}") ?: null,
+				// Stats for an org matched by TEXT rather than by org id. Such an org
+				// holds NO spine row — so `/get/capital/stats/org/{id}` correctly
+				// answers `found: false` for it, and this is the only figure it has.
+				'unionStatsUrl' => DatabookAPI::url("/get/orgs/pstats-union/{$id}"),
 				####### seo ########
 				#'schema' => Schema::org($org),
 				'pagetitle' => "{$dispName} | WeGovNYC Databook",
@@ -660,93 +713,89 @@ class Organizations extends Controller
 	 * @param  string  	$prjId
 	 * @return \Illuminate\View\View
 	 */
+	/**
+	 * One capital project, from the spine.
+	 *
+	 * ⚠⚠ TWO LIVE DEFECTS THIS REPLACES, BOTH MEASURED 2026-09-06.
+	 *
+	 * `/p/111PO111-17` returned **404** — a real project in the current Capital
+	 * Commitment Plan. The old action required `fetchOrg()` to succeed, and
+	 * **4,568 of 17,024 spine rows carry no `wegov_org_id`** (27%), so a quarter
+	 * of the capital programme had no page at all. The org shell is now
+	 * conditional: an agency we know gets its profile chrome, and one we do not
+	 * still gets a project page.
+	 *
+	 * `/p/110WLM` returned **200** and showed ONE project — that id is carried by
+	 * DCAS (856) and agency 068. A bare FMS id does not identify a project:
+	 * 1,160 ids are shared across agencies, covering 2,371 rows. The endpoint
+	 * returns the CHOICES and never picks; this renders them.
+	 *
+	 * ⚠ The canonical id is the agency-concatenated form (`035L103RENO`), which
+	 * is what CPDB, Parks and Climate Budgeting all publish and what Databook's
+	 * legacy URL already used. A bare id still resolves when it is unique.
+	 */
 	public function project($prjId, $prjslug = '')
 	{
 		$section = 'projects';
 		$ds = new OrgsDatasets();
-		$pds = new ProjectsDatasets();
 		$details = $ds->get($section);
-		$prj = DatabookAPI::req("/get/capitalprojects/core/{$prjId}");		#241
-		if (!$prj || !isset($prj[0])) {
+
+		// ⚠ The agency is a DISAMBIGUATOR, not a filter — it only ever narrows a
+		// shared id to one project, and the endpoint refuses to guess without it.
+		$agency = trim((string) request()->input('agency', ''));
+		$q = $agency === '' ? '' : ('?agency=' . rawurlencode($agency));
+		$p = DatabookAPI::reqOCE('/get/capital/project/' . rawurlencode($prjId) . $q, 15);
+
+		// ⚠ `false` means the API could not be reached; `available` false means it
+		// answered and has nothing. Collapsing the two turns a deploy restart into
+		// "this project does not exist" (the #135 distinction).
+		if ($p === false || !is_array($p))
+			return response()->view('errors.service-unavailable', [], 503);
+
+		if (empty($p['found'])) {
+			if (!empty($p['ambiguous']))
+				return view('capitalprojectchoices', [
+					'breadcrumbs' => Breadcrumbs::purePrj($prjId, $prjId),
+					'prjId' => $prjId,
+					'cap' => $p,
+					'pagetitle' => "{$prjId} — more than one project | NYC Databook",
+				]);
 			return abort(404);
 		}
-		// A core row tagged _source='list' is a list-only project (present in
-		// capitalprojectslist but absent from the commitment-plan dollars dataset).
-		// Render the reduced 'pureproject' page; the full page needs dollarscomp.
-		if (($prj[0]['_source'] ?? null) !== 'list') {
-			$data = CapProjectsBuilder2024::build($prj[0]);
-			if (0)
-			{
-				echo '<pre>';
-				print_r($data);
-				return;
-			}
-			
-			$id = $data['id'];
-			$org = $this->fetchOrg($id);
-			return $org && $details
-				? view('orgproject', [
-					'id' => $id,
-					'prjId' => $prjId,
-					'pagetitle' => "{$data['name']} | {$prjId}",
-					'org' => $org,
-					'section' => $section,
-					'slist' => $ds->list,
-					'menu' => $ds->menu,
-					'activeDropDown' => $ds->menuActiveDD($section),
-					'icons' => $ds->socicons,
-					'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
-					'breadcrumbs' => Breadcrumbs::orgPrj($org['id'], $org['name'], $section, $ds->list[$section], $prjId, $data['name']),
-					'urls' => [
-						'commitments' => DatabookAPI::url("/get/capitalprojects/commitments/{$prjId}"),
-						'budgetandspend' => DatabookAPI::url("/get/capitalprojects/budgetandspend/{$prjId}"),
-						'budgetspendhistory' => DatabookAPI::url("/get/capitalprojects/budgetspendhistory/{$prjId}"),
-						'schedulehistory' => DatabookAPI::url("/get/capitalprojects/schedulehistory/" . ($prj[0]['magencyacro'] ?? $prj[0]['MANAGING_AGCY_CD'] ?? '')),
-						'budgetsandschedule' => DatabookAPI::url("/get/capitalprojects/budgetsandschedule/{$prjId}"),
-					],
-					#'coreUrl' => DatabookAPI::url("/get/capitalprojects/core/{$prjId}"),
-					'data' => $data,
-					'map' => true,
-					'datasets' => $pds->stats_data_sources(
-						DatabookAPI::req('/get/datasets/all'),
-						['capitalprojectsdollarscomp', 'capitalprojectsmilestones', 'capitalprojectslist', 'capitalprojectscommitments']
-					),
-					'tblStatsUrl' => DatabookAPI::url("/get/pstats-records_no-byprj/tblname/{$prjId}"),
-					####### seo ########
-					'schema' => Schema::project($prj[0], $org),
-					'pagetitle' => "{$prj[0]['PROJECT_DESCR']} | WeGovNYC Databook Capital Projects",
-					'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', "{$prj[0]['PROJECT_ID']} - {$prj[0]['PROJECT_DESCR']}"),
-					'canonicalUrl' => route('project', ['prjId' => $prj[0]['PROJECT_ID'], 'prjslug' => Str::slug($prj[0]['PROJECT_DESCR'], '-')]),
-				])
-				: abort(404);
-		} else {
-			$orgId = $prj[0]['wegov-org-id'] ?? null;
-			$org = $orgId ? ($this->fetchOrg($orgId)) : null;
-			return $org
-				? view('pureproject', [
-					'id' => $orgId,
-					'prjId' => $prjId,
-					'pagetitle' => "{$prj[0]['description']} | {$prjId}",
-					'org' => $org,
-					'section' => $section,
-					'slist' => $ds->list,
-					'menu' => $ds->menu,
-					'activeDropDown' => $ds->menuActiveDD($section),
-					'icons' => $ds->socicons,
-					'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
-					#'coreUrl' => DatabookAPI::url("/get/capitalprojects/core/{$prjId}"),
-					'prj' => $prj,
-					'commUrl' => DatabookAPI::url("/get/capitalprojects/commitments/{$prjId}"),
-					'breadcrumbs' => Breadcrumbs::purePrj($prjId, $prj[0]['description']),
-					'map' => true,
-					####### seo ########
-					#'schema' => Schema::project($prj[0], $org),
-					'pagetitle' => "{$prj[0]['description']} | WeGovNYC Databook Capital Projects",
-					'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', "{$prjId}"),
-					'canonicalUrl' => route('project', ['prjId' => $prjId, 'prjslug' => Str::slug($prj[0]['description'], '-')]),
-				])
-				: abort(404);
-		}
+
+		$orgId = $p['header']['wegov_org_id'] ?? null;
+		$org = $orgId ? $this->fetchOrg($orgId) : null;
+		$name = $p['header']['description'] ?: ($p['id']['maprojid'] ?? $prjId);
+		$canonId = ($p['id']['agency_key'] ?? '') . ($p['id']['fms_id'] ?? '');
+
+		return view('capitalproject', [
+			// ⚠⚠ EVERY KEY THE VIEW READS MUST BE NAMED HERE (#247). A payload the
+			// API serves and the Blade reads still arrives as null unless it is
+			// listed, and `?? []` in the view makes that silent.
+			'cap' => $p,
+			'prjId' => $prjId,
+			'canonId' => $canonId,
+			'geojsonUrl' => DatabookAPI::url('/get/capital/project/' . rawurlencode($canonId) . '/geometry'),
+
+			// The org shell renders only when we know the agency — see the note
+			// above; requiring it 404'd 4,568 projects.
+			'id' => $orgId,
+			'org' => $org,
+			'section' => $section,
+			'slist' => $ds->list,
+			'menu' => $ds->menu,
+			'activeDropDown' => $ds->menuActiveDD($section),
+			'icons' => $ds->socicons,
+			'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
+			'breadcrumbs' => $org
+				? Breadcrumbs::orgPrj($orgId, $org['name'], $section, $ds->list[$section], $canonId, $name)
+				: Breadcrumbs::purePrj($canonId, $name),
+			'map' => true,
+			####### seo ########
+			'pagetitle' => "{$name} | {$canonId} | NYC Databook Capital Projects",
+			'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', "{$canonId} - {$name}"),
+			'canonicalUrl' => route('project', ['prjId' => $canonId, 'prjslug' => Str::slug($name, '-')]),
+		]);
 	}
 
 
@@ -754,89 +803,6 @@ class Organizations extends Controller
 	 * Show capital project.
 	 *
 	 * @param  string  	$prjId
-	 * @return \Illuminate\View\View
-	 */
-	public function project_a($prjId, $prjslug = '')
-	{
-		$section = 'projects';
-		$ds = new OrgsDatasets();
-		$pds = new ProjectsDatasets();
-		$details = $ds->get($section);
-		$prj = DatabookAPI::req("/get/capitalprojects/profile/{$prjId}");
-		if ($prj) {
-			$data = CapProjectsBuilder::build(
-				$prj,
-				DatabookAPI::req("/get/capitalprojects/milestones/{$prjId}")
-			);
-			$id = $data['id'];
-			$org = $this->fetchOrg($id);
-			#var_dump($data['items']);
-			return $org && $details
-				? view('orgprojectA', [
-					'id' => $id,
-					'prjId' => $prjId,
-					'pagetitle' => "{$data['name']} | {$prjId}",
-					'org' => $org,
-					'section' => $section,
-					'slist' => $ds->list,
-					'menu' => $ds->menu,
-					'activeDropDown' => $ds->menuActiveDD($section),
-					'icons' => $ds->socicons,
-					'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
-					'coreUrl' => DatabookAPI::url("/get/capitalprojects/core/{$prjId}"),
-					'commUrl' => DatabookAPI::url("/get/capitalprojects/commitments/{$prjId}"),
-					'breadcrumbs' => Breadcrumbs::orgPrj($org['id'], $org['name'], $section, $ds->list[$section], $prjId, $data['name']),
-					'data' => $data,
-					'map' => true,
-					#'defaultPubDate' => '20221012',
-					'datasets' => $pds->stats_data_sources(
-						DatabookAPI::req('/get/datasets/all'),
-						['capitalprojectsdollarscomp', 'capitalprojectsmilestones', 'capitalprojectslist', 'capitalprojectscommitments']
-					),
-					'tblStatsUrl' => DatabookAPI::url("/get/pstats-records_no-byprj/tblname/{$prjId}"),
-					####### seo ########
-					'schema' => Schema::project_a($prj[0], $org),
-					'pagetitle' => "{$prj[0]['PROJECT_DESCR']} | WeGovNYC Databook Capital Projects",
-					'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', "{$prj[0]['PROJECT_ID']} - {$prj[0]['SCOPE_TEXT']}"),
-					'canonicalUrl' => route('project', ['prjId' => $prj[0]['PROJECT_ID'], 'prjslug' => Str::slug($prj[0]['PROJECT_DESCR'], '-')]),
-				])
-				: abort(404);
-		} else {
-			$prj = DatabookAPI::req("/get/capitalprojects/core/{$prjId}");
-			$org = $this->fetchOrg($prj[0]['wegov-org-id']);
-			return $prj && $org
-				? view('pureproject', [
-					'id' => $prj[0]['wegov-org-id'],
-					'prjId' => $prjId,
-					'pagetitle' => "{$prj[0]['description']} | {$prjId}",
-					'org' => $org,
-					'section' => $section,
-					'slist' => $ds->list,
-					'menu' => $ds->menu,
-					'activeDropDown' => $ds->menuActiveDD($section),
-					'icons' => $ds->socicons,
-					'dataset' => DatabookAPI::req('/get/datasets/profile/' . rawurlencode($details['fullname']))[0] ?? null,
-					#'coreUrl' => DatabookAPI::url("/get/capitalprojects/core/{$prjId}"),
-					'prj' => $prj,
-					'commUrl' => DatabookAPI::url("/get/capitalprojects/commitments/{$prjId}"),
-					'breadcrumbs' => Breadcrumbs::purePrj($prjId, $prj[0]['description']),
-					'map' => true,
-					####### seo ########
-					#'schema' => Schema::project($prj[0], $org),
-					'pagetitle' => "{$prj[0]['description']} | WeGovNYC Databook Capital Projects",
-					'snippet' => preg_replace('~\s*[\r\n]+\s*~', ' ', "{$prjId}"),
-					'canonicalUrl' => route('project', ['prjId' => $prjId, 'prjslug' => Str::slug($prj[0]['description'], '-')]),
-				])
-				: abort(404);
-		}
-	}
-
-
-	/**
-	 * Show dataset charts.
-	 *
-	 * @param  string  	$id
-	 * @param  string  	$chartName
 	 * @return \Illuminate\View\View
 	 */
 	public function orgChartsXHR($id, $section)
@@ -921,7 +887,9 @@ END:VCALENDAR', 200)
 		$dd[] = [route('districts'), 0.6, 'monthly'];
 		foreach (['cc', 'cd', 'nta'] as $type) {
 			$fn = public_path("data/{$type}.geojson");
-			$title = ['cc' => 'City Council District ', 'cd' => 'Community District ', 'nta' => ''][$type];
+			// ⚠ ONE OWNER (App\Custom\DistrictName). The literal typed here carried
+			// no `sd` key at all — harmless only because this loop never asks for one.
+			$title = \App\Custom\DistrictName::PREFIX[$type];
 			$geojson = json_decode(file_get_contents($fn), true);
 			$f = $type == 'nta' ? 'nameAlt' : 'nameCol';
 			foreach ($geojson['features'] as $d) {

@@ -26,6 +26,20 @@
     $active = array_filter(['q' => $rq, 'agency' => $ragency, 'fiscal_year' => $rf['fiscal_year'] ?? '', 'sort' => $rsort, 'order' => $rorder], fn($v) => $v !== '' && $v !== null);
     $pageUrl = fn($p) => $base . '?' . http_build_query(array_merge($active, ['page' => $p]));
     $exportUrl = \App\Custom\DatabookAPI::url('/oce/payroll/records/export?' . http_build_query($active));
+    // The fiscal year(s) still in progress, served by the API so the chart can say why
+    // they are not drawn. Rendered from the payload, never typed: a hardcoded year goes
+    // stale in July and a hardcoded figure is wrong the next time the lake refreshes.
+    $partialYears = $summary['partial'] ?? [];
+    $partialNote = '';
+    if ($partialYears) {
+        $bits = [];
+        foreach ($partialYears as $py) {
+            $bits[] = 'FY' . (int) ($py['year'] ?? 0) . ' (' . $compact($py['gross'] ?? 0) . ' so far)';
+        }
+        $partialNote = 'Complete fiscal years only. ' . implode(', ', $bits)
+            . (count($bits) === 1 ? ' is' : ' are') . ' still in progress and not charted -'
+            . ' a part-year bar reads as a fall in pay rather than a year that has not ended.';
+    }
     $sorts = ['gross' => 'Gross pay', 'overtime' => 'Overtime', 'base' => 'Base pay', 'records' => 'Pay records', 'avg_salary' => 'Avg salary', 'title' => 'Title (A–Z)'];
 @endphp
 
@@ -86,6 +100,9 @@
                 <div class="db-chart-card h-100">
                     <div class="db-chart-head"><span class="db-chart-title">Gross pay &amp; overtime by fiscal year</span></div>
                     <div class="db-chart-body" style="height: 300px;"><canvas id="byYearChart"></canvas></div>
+                    @if($partialNote)
+                        <p class="db-note-small" style="margin: var(--db-space-2) 0 0;">{{ $partialNote }}</p>
+                    @endif
                 </div>
             </div>
             <div class="col-lg-5 mb-4">

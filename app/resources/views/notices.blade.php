@@ -80,10 +80,18 @@
 					    </a>
 					  </div>
 					@endforeach
-					<div class="row justify-content-center">
-						<div class="col-md-12 text-center">
-							<a type="button" class="db-btn db-btn-outline" href="{{ route('noticesSection', ['section' => 'all']) }}">See All News</a>
-						</div>
+					{{-- ⚠ A plain centred div, NOT a `.row` + `.col-md-12`. Measured
+					     2026-09-18: a nested row inside `.organization_data` overhangs
+					     its parent by 12px each side at <=1024, because
+					     `responsive.css`'s `@media (max-width: 1024px)` sets
+					     `.organization_data { padding: 20px 0px 20px }` and the row's
+					     -12px gutters have nothing left to cancel against. At exactly
+					     1024 that put a 12px sideways scroll on this page — the only
+					     one of 13 page families that showed it — and below 1024 it was
+					     silently clipped by the nav drawer's `overflow-x: clip`. The
+					     row/col pair did nothing here that `text-center` does not. --}}
+					<div class="text-center">
+						<a type="button" class="db-btn db-btn-outline" href="{{ route('noticesSection', ['section' => 'all']) }}">See All News</a>
 					</div>
 					
 				</div>
@@ -108,10 +116,11 @@
 					    </a>
 					  </div>
 					@endforeach
-					<div class="row justify-content-center">
-						<div class="col-md-12 text-center">
-							<a type="button" class="db-btn db-btn-outline" href="{{ route('noticesSection', ['section' => 'events']) }}">See All Events</a>
-						</div>
+					{{-- Same as the News button above — see the note there. This is the
+					     instance that actually showed, because it is the RIGHT-hand
+					     column and its 12px overhang had no page padding left to eat. --}}
+					<div class="text-center">
+						<a type="button" class="db-btn db-btn-outline" href="{{ route('noticesSection', ['section' => 'events']) }}">See All Events</a>
 					</div>
 				</div>
 			</div>

@@ -370,25 +370,63 @@
 			</div>
 
 			<!-- Capital Program -->
+			@php
+				// >> REPOINTED OFF THE RETIRED SERIES, 2026-09-09 (Phase 4).
+				// These three tiles hydrated from `globStats` - `cached_stats`
+				// over `capitalprojectsdollarscomp`, retired by NYC 2023-10-26
+				// - so the front page published 5,128 projects while
+				// /procurement and /projects/capital, rebuilt on the spine,
+				// published 12,929. Same subject, two numbers, on the two most
+				// visited pages of the site.
+				//
+				// >> AND `data-multiplier="1000"` HAD TO GO WITH THEM. The
+				// retired series is denominated in THOUSANDS and the spine in
+				// USD, so carrying the multiplier onto spine rows renders
+				// $201.6B as $201.6T - plausible-looking, and invisible to a
+				// row count or a status code.
+				//
+				// > Two counts and ONE money measure, deliberately. The six
+				// money measures are not a funnel; any two of them side by side
+				// need the "do not sum or nest" caveat, and a home card has no
+				// honest room for one. In Plan beside Tracked makes both
+				// denominators data rather than something a reader infers.
+				$hCap   = is_array($capital ?? null) ? $capital : [];
+				$hCapOk = !empty($hCap['available']);
+				$hFmtN  = function ($v) {
+					return is_numeric($v) ? number_format((float) $v) : '—';
+				};
+				$hMoney = [];
+				foreach (($hCap['money']['measures'] ?? []) as $hm) {
+					$hMoney[$hm['key'] ?? ''] = $hm;
+				}
+				$hPlanned = $hMoney['planned_usd']['value'] ?? null;
+				$hFmtB = function ($v) {
+					if (!is_numeric($v)) return '—';
+					$v = (float) $v;
+					if (abs($v) >= 1000000000) return '$' . number_format($v / 1000000000, 1) . 'B';
+					if (abs($v) >= 1000000) return '$' . number_format($v / 1000000, 1) . 'M';
+					return '$' . number_format($v);
+				};
+			@endphp
 			<div class="col-md-3 mb-3">
 				<a href="{{ route('capital') }}" class="home-card">
 					<div class="d-flex align-items-center mb-2">
 						<img src="/img/projects.png" style="width: 36px; height: 36px; margin-right: 10px;">
 						<h5 style="margin: 0; font-weight: 700;">Projects</h5>
 					</div>
-					<p class="text-muted small mb-2">Capital budget & commitments</p>
+					<p class="text-muted small mb-2">Current capital commitment plan</p>
 					<div class="row text-center mb-0">
 						<div class="col-4">
-							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Projects</div>
-							<strong id="projects_no" class="prj_stat gs_thousandscomma">&nbsp;</strong>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">In Plan</div>
+							<strong>{{ $hCapOk ? $hFmtN($hCap['in_current_plan'] ?? null) : '—' }}</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Orig. Cost</div>
-							<strong id="orig_cost" class="prj_stat gs_finshort" data-multiplier="1000">&nbsp;</strong>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Tracked</div>
+							<strong>{{ $hCapOk ? $hFmtN($hCap['projects'] ?? null) : '—' }}</strong>
 						</div>
 						<div class="col-4">
-							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Curr. Cost</div>
-							<strong id="curr_cost" class="prj_stat gs_finshort" data-multiplier="1000">&nbsp;</strong>
+							<div style="font-size: 11px; color: var(--db-text-muted); text-transform: uppercase;">Planned</div>
+							<strong>{{ $hCapOk ? $hFmtB($hPlanned) : '—' }}</strong>
 						</div>
 					</div>
 				</a>
@@ -556,21 +594,6 @@
 @section('scripts')
 	<script>
 		$(document).ready(function() {
-			var uu = {!! json_encode($finStatUrls) !!}
-			/*
-			for (let sel in uu) {
-				fapireq(uu[sel], function (resp) {
-					var v = resp['data'][0]['res'] ?? '-'
-					//console.log(['#orig_cost', '#curr_cost', '#over_budg_am'].includes(sel))
-					if ((['#orig_cost', '#curr_cost', '#over_budg_am'].includes(sel)) && (v != '-')) {
-						$(sel).text(toFinShortK(v, 1000))
-						$(sel).attr('data-content', toFin(v, 1000))
-					}
-					else
-						$(sel).text(v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","))
-				})
-			}
-			*/
 			globStatView({!! json_encode($globStats) !!})
 
 			// Override stale static stats with live data from the API

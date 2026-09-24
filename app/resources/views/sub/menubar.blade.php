@@ -94,9 +94,26 @@
                 ['Agencies',      route('procurement.agencies'),      Request::is('procurement/agencies*') || Request::is('procurement/agency*')],
                 // Orange = Analysis product (analyst/AI-enriched, not raw official data).
                 ['Digital Services Analysis', route('research.digital-reform'), Request::is('research/digital-reform*'), [
-                    ['Overview',                route('research.digital-reform'),          Request::is('research/digital-reform') && !Request::is('research/digital-reform/expiring') && !Request::is('research/digital-reform/licenses*')],
-                    ['Contracts Expiring Soon', route('research.digital-reform.expiring'), Request::is('research/digital-reform/expiring')],
-                    ['Software Licenses',       route('research.digital-reform.licenses'), Request::is('research/digital-reform/licenses*')],
+                    // Five-page reorg 2026-08-21 (docs/DIGITAL-REFORM-REORG-PLAN.md),
+                    // plus Data (2026-09-14, DIGITAL-SERVICES-SECTION-PLAN.md §5c) —
+                    // sited after Products because it reads the same curated layers.
+                    // ⚠ CALL CENTERS IS DELIBERATELY NOT LISTED (owner, 2026-09-16)
+                    // — "take it out of the submenu for now and let's return to
+                    // it later". The ROUTE AND PAGE STAY LIVE so the work is not
+                    // lost; it is unlinked, not deleted.
+                    // ⚠ "Master Agreements" -> "Agreements" the same day, and the
+                    // URL moved with the label (/master-agreements 302s). A label
+                    // and a path that disagree is how a section ends up with two
+                    // names for one page.
+                    // Vendors last by owner decision. Old /expiring and /licenses*
+                    // URLs 302 in routes/web.php, so the Request::is patterns here
+                    // only ever see the new paths.
+                    ['Overview',          route('research.digital-reform'),                   Request::is('research/digital-reform')],
+                    ['Contracts',         route('research.digital-reform.contracts'),         Request::is('research/digital-reform/contracts', 'research/digital-reform/contracts/*')],
+                    ['Products',          route('research.digital-reform.products'),          Request::is('research/digital-reform/products*')],
+                    ['Data',              route('research.digital-reform.data'),              Request::is('research/digital-reform/data')],
+                    ['Agreements',        route('research.digital-reform.agreements'),        Request::is('research/digital-reform/agreements')],
+                    ['Vendors',           route('research.digital-reform.vendors'),           Request::is('research/digital-reform/vendors')],
                 ]],
             ],
         ],
@@ -119,6 +136,23 @@
     $activeSection = null;
     foreach ($sections as $section) {
         if ($section['show']) { $activeSection = $section; break; }
+    }
+
+    // ---- Third bar ---------------------------------------------------------
+    // An item carrying children (only Digital Services Analysis today) renders
+    // its children as a THIRD horizontal bar below the submenu, not a dropdown.
+    // Hoisted out here because that bar must be a SIBLING of .db-submenu: the
+    // submenu's inner is overflow-x:auto at a fixed height and would clip it.
+    // ⚠ It renders when you are INSIDE the section and not otherwise -- the same
+    // rule the Procurement bar itself follows. It used to be openable from a
+    // sibling page by a toggle; that toggle is now a link, so there is no state
+    // to carry and $barShown is simply "am I in this section".
+    $barTitle = null; $barItems = null; $barShown = false;
+    foreach (($activeSection['items'] ?? []) as $item) {
+        if (!empty($item[3])) {
+            $barTitle = $item[0]; $barItems = $item[3]; $barShown = (bool) $item[2];
+            break;
+        }
     }
 
     // Breadcrumbs render only when present AND the page has no submenu of its own.
@@ -161,15 +195,13 @@
             @foreach ($activeSection['items'] as $item)
                 @php $label = $item[0]; $href = $item[1]; $active = $item[2]; $children = $item[3] ?? null; @endphp
                 @if ($children)
+                    {{-- ⚠ A LINK, like every sibling. It navigates to the section's
+                         Overview; the bar below then renders because you are IN the
+                         section, not because anything was toggled. No caret: a caret
+                         advertises a disclosure, and there is none. --}}
                     <div class="db-submenu-analysis">
-                        <button type="button" class="db-submenu-link db-analysis-toggle{{ $active ? ' is-active' : '' }}" id="dsAnalysisToggle" aria-haspopup="true" aria-expanded="false">
-                            {{ $label }} <i class="bi bi-caret-down-fill" style="font-size: .7em;"></i>
-                        </button>
-                        <div class="db-analysis-menu" id="dsAnalysisMenu" role="menu">
-                            @foreach ($children as [$cLabel, $cHref, $cActive])
-                                <a role="menuitem" class="{{ $cActive ? 'is-active' : '' }}" href="{{ $cHref }}">{{ $cLabel }}</a>
-                            @endforeach
-                        </div>
+                        <a href="{{ $href }}"
+                           class="db-submenu-link db-analysis-link{{ $active ? ' is-active' : '' }}">{{ $label }}</a>
                     </div>
                 @else
                     <a href="{{ $href }}" class="db-submenu-link{{ $active ? ' is-active' : '' }}">{{ $label }}</a>
@@ -180,31 +212,23 @@
 </div>
 @endif
 
-{{-- Orange "Digital Services Analysis" submenu dropdown. The menu is
-     position:fixed and placed under the toggle by JS, so it escapes the submenu
-     bar's overflow-x:auto clipping. Plain vanilla &mdash; no Bootstrap dependency. --}}
-<script>
-(function () {
-    var t = document.getElementById('dsAnalysisToggle');
-    var m = document.getElementById('dsAnalysisMenu');
-    if (!t || !m) return;
-    function place() {
-        var r = t.getBoundingClientRect();
-        m.style.top = (r.bottom + 4) + 'px';
-        m.style.left = r.left + 'px';
-    }
-    function open() { place(); m.classList.add('is-open'); t.setAttribute('aria-expanded', 'true'); }
-    function close() { m.classList.remove('is-open'); t.setAttribute('aria-expanded', 'false'); }
-    t.addEventListener('click', function (e) {
-        e.stopPropagation();
-        m.classList.contains('is-open') ? close() : open();
-    });
-    document.addEventListener('click', function (e) { if (!m.contains(e.target)) close(); });
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
-    window.addEventListener('resize', function () { if (m.classList.contains('is-open')) place(); });
-    window.addEventListener('scroll', function () { if (m.classList.contains('is-open')) place(); }, true);
-})();
-</script>
+{{-- ============ THE THIRD BAR ============================================
+     The Digital Services Analysis section's own nav. Rendered outside
+     .db-submenu (see the @php note above) and sticky under it, so it stays on
+     screen while you read a long page. Plain vanilla -- no Bootstrap. --}}
+@if ($barShown)
+<div class="db-analysis-bar" id="dsAnalysisBar">
+    <div class="container db-analysis-bar-inner">
+        <span class="db-analysis-bar-title"><i class="bi bi-lightbulb"></i> {{ $barTitle }}</span>
+        <nav class="db-analysis-bar-nav">
+            @foreach ($barItems as [$cLabel, $cHref, $cActive])
+                <a href="{{ $cHref }}" class="{{ $cActive ? 'is-active' : '' }}"
+                   @if($cActive) aria-current="page" @endif>{{ $cLabel }}</a>
+            @endforeach
+        </nav>
+    </div>
+</div>
+@endif
 
 @if ($showBreadcrumbs)
 <div class="container">

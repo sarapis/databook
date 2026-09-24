@@ -528,6 +528,34 @@ function mapPopup(e) {
 }
 
 
+/**
+ * Parse a GEO_JSON string served by the API.
+ *
+ * ⚠⚠ TRY THE VALUE AS SERVED FIRST. Callers historically did
+ * `JSON.parse(s.replaceAll('""', '"'))` to undo CSV quote-doubling, but the API
+ * serves clean JSON straight from Postgres — and on correctly-escaped JSON that
+ * replace CORRUPTS the value. A project named  Plaza"A"  is stored with the
+ * quotes escaped as  \"A\" , and the replace collapses the trailing  \""  to
+ * \" , which unterminates the string.
+ *
+ * Measured 2026-09-04 over every capital project carrying geometry in the
+ * newest publication: **all 3,082 parse as served, and exactly one fails after
+ * the replace** — `P-1PELHAM`, "Pelham Parkway Malls-Plaza"A"" (Parks). The
+ * per-row catch at each call site swallowed it, so that project was silently
+ * absent from the map rather than erroring.
+ *
+ * The fallback is kept so a genuinely quote-doubled source still works: this
+ * can only widen what parses, never narrow it.
+ */
+function parseGeoJSON(s) {
+	try {
+		return JSON.parse(s);
+	} catch (e) {
+		return JSON.parse(String(s).replaceAll('""', '"'));
+	}
+}
+
+
 function projectsMapInit(as_addon = false) {
 	if (!as_addon)
 		newMap();
@@ -616,6 +644,27 @@ function schoolsMapDrawFeatures(dd, do_fitbounds = true) {
 
 
 function projectsMapDrawFeatures(dd, do_fitbounds = true) {
+	// ⚠⚠ WAIT FOR THE MAP, OR THE WHOLE MAP SILENTLY STAYS EMPTY. The 'route'
+	// source this function writes to is added inside projectsMapInit's
+	// `map.on('load')` handler, while the caller fires the moment the API
+	// responds. Whichever wins is a race: when the DATA wins, `getSource`
+	// returns undefined, `src.setData(...)` throws, and the page renders a
+	// basemap with no features and only a console error.
+	//
+	// Measured 2026-09-04: against a local API (~20ms) the data wins EVERY
+	// time, so /projects, the org projects tab, category and budget-line maps
+	// all drew nothing. Production currently escapes it only because the
+	// projects payload is ~14 MB and the map wins — i.e. it is timing, not
+	// design, that keeps it working there.
+	//
+	// projectsMapInit() registers its load handler synchronously before any
+	// fetch starts, so a missing 'route' source means load has not fired yet
+	// and deferring to it is safe.
+	if (!map.getSource('route')) {
+		map.once('load', function () { projectsMapDrawFeatures(dd, do_fitbounds); });
+		return;
+	}
+
 	var bounds = [[360, 180], [-360, -180]];
 	//var colors_depr = ['#ecd078', '#d95b43', '#c02942', '#542437', '#53777a', '#f5ae33', '#99ac40', '#ff7c7c', '#78c0a8', '#7a6a53', '#6c5b7b', '#c06c84', '#d2ff0f', '#f2c45a', '#3b2d38', '#b8af03', '#d1e751', '#ff3a31', '#99b59a', '#676970', '#ecd078', '#618eff', '#7dffff', '#f07241', '#bcbcbc'];
 
@@ -658,6 +707,187 @@ function fitBounds(bounds) {
 }
 
 
+/** the scoped capital map ***********************************************
+ *
+ * ⚠⚠ ONE OWNER, BECAUSE THERE WERE THREE BYTE-IDENTICAL COPIES AND ALL THREE
+ * WERE DRAWING NOTHING. `budgetLineA`, `categoryA` and `orgprojectsection` each
+ * held the same `drawProjects(pages)` reading `r['GEO_JSON']` out of their own
+ * DataTable. Every one of those pages was migrated onto the capital spine, and
+ * the spine carries no `GEO_JSON` column at all — so each map drew an empty
+ * `route` source with a clean container, a loaded style and an empty console.
+ *
+ * Measured on the rendered pages, 2026-09-10, reading
+ * `map.getSource('route')._data.features.length` rather than pixels:
+ *
+ *     /projects/categories/routine-reconstruction        table   447   map 0
+ *     /projects/categories/neighborhood-parks-...        table 1,036   map 0
+ *     /o/170010846-x/projects  (org capital tab)         table 2,798   map 0
+ *     /projects/budget-lines/EP 0007                     table    60   map 0
+ *
+ * A row count, a status code and a JS-error check all pass on that. This is the
+ * five-surfaces finding of 2026-09-09 arriving in a fourth organ: a tab is not
+ * migrated when its TABLE is repointed.
+ *
+ * ⚠ THE FEATURES COME FROM `/get/capital/geojson`, SCOPED THE SAME WAY THE LIST
+ * IS. Each page passes one scope (a budget line, a Ten-Year category, an org),
+ * so the map and the table cannot answer one question two ways — the property
+ * `/projects` had to be given by construction after `?has_location=false`
+ * listed 12,464 projects while its map drew 4,560 the list had excluded.
+ *
+ * ⚠ The table's CLIENT-SIDE search still moves the map: the served features are
+ * INTERSECTED with the ids the table is currently showing, never re-derived.
+ */
+var capMap = (function () {
+	var url = null;
+	var features = null;       // every located project in this scope
+	var located = null;        // Set of ids the City publishes a location for
+	var coverage = null;       // the endpoint's own denominator, served
+	var mapReady = false;
+	var pending = false;       // a draw was asked for before both were ready
+	var fetching = false;
+
+	function idOf(props) {
+		props = props || {};
+		return String((props.agency_key || '') + (props.fms_id || ''));
+	}
+
+	function init(geojsonUrl) {
+		url = geojsonUrl || null;
+	}
+
+	// ⚠ Called from the view's mapbox `load` handler. `load` may already have
+	// fired by the time a view binds, so each caller also checks `map.loaded()`;
+	// mapbox no-ops a late `on('load')`.
+	function ready() {
+		mapReady = true;
+		if (pending) { pending = false; draw('all'); }
+	}
+
+	function isLocated(id) {
+		return !!(located && id && located.has(String(id)));
+	}
+
+	// ⚠⚠ THE OLD PAGES DID THIS IN `createdRow` FROM `data.GEO_JSON != ''`. On a
+	// spine row that key is UNDEFINED and `undefined != ''` is TRUE, so every row
+	// would be marked as located — including the 40 of 60 on EP 0007 the City
+	// publishes no location for. It runs on the fetch AND on every draw, because
+	// the two are a race.
+	function markLocated() {
+		if (!located || !jQuery.fn.dataTable.isDataTable('#myTable')) return;
+		jQuery('#myTable').dataTable().api().rows().every(function () {
+			var d = this.data();
+			jQuery(this.node()).toggleClass('have_coords',
+				isLocated(d && d.id));
+		});
+	}
+
+	function visibleIds(pages) {
+		var ids = new Set();
+		if (!jQuery.fn.dataTable.isDataTable('#myTable')) return ids;
+		jQuery('#myTable').dataTable().api()
+			.rows('', {order: 'current', page: pages, search: 'applied'})
+			.data().each(function (r) { if (r && r.id) ids.add(String(r.id)); });
+		return ids;
+	}
+
+	function draw(pages) {
+		// The map is hidden until the reader opens it; `toggleMap()` clears the
+		// inline style, so an empty/absent style attribute means it is showing.
+		if (jQuery('#map_container').attr('style')) return;
+		// ⚠⚠ HOLD WHATEVER ARRIVES FIRST AND DRAW WHEN BOTH ARE READY. The `route`
+		// source is added inside mapbox's `load` handler while the fetch fires
+		// independently; when the DATA wins, `map.getSource('route')` is undefined,
+		// `setData` throws inside the AJAX success handler and the map stays empty
+		// for ever. Measured against a local API the data wins every time — the old
+		// pages escaped it only on payload size, and papered over it with a
+		// `setTimeout(..., 3000)`, which is a guess about the style load rather
+		// than a synchronisation with it.
+		if (features === null || !mapReady) {
+			pending = true;
+			fetch();
+			return;
+		}
+		var ids = visibleIds(pages);
+		var shown = features.filter(function (ft) {
+			return ids.has(idOf(ft.properties));
+		});
+		projectsMapDrawFeatures(shown);
+		window.CAP_MAP_FEATURES = shown.length;
+	}
+
+	// ⚠ Zoom to one project, looked up in the SERVED features by the same
+	// agency-concatenated id the table renders — the spine row has no geometry on
+	// it. A project with no published location zooms nowhere, which is the honest
+	// answer rather than a jump to wherever the last click left the view.
+	function zoomTo(id) {
+		if (!features || !id) return;
+		var want = String(id);
+		for (var i = 0; i < features.length; i++) {
+			if (idOf(features[i].properties) === want) {
+				var pr = features[i].properties;
+				fitBounds([[pr.W, pr.S], [pr.E, pr.N]]);
+				return;
+			}
+		}
+	}
+
+	function fetch() {
+		if (url === null || features !== null || fetching) return;
+		fetching = true;
+		jQuery.ajax({
+			url: url,
+			dataType: 'json',
+			success: function (fc) {
+				var ff = (fc && fc.features) ? fc.features : [];
+				ff.forEach(function (ft) {
+					var c = ft.geometry && ft.geometry.coordinates;
+					if (!ft.properties) ft.properties = {};
+					// `projectsMapDrawFeatures` fits the view from W/S/E/N; a
+					// centroid is its own bounding box.
+					if (c && c.length === 2) {
+						ft.properties.W = ft.properties.E = parseFloat(c[0]);
+						ft.properties.S = ft.properties.N = parseFloat(c[1]);
+					}
+				});
+				features = ff;
+				located = new Set(ff.map(function (ft) { return idOf(ft.properties); }));
+				// ⚠ The note is the SERVED sentence, printed as it came: it carries
+				// the denominator for the scope actually applied. A map with no
+				// denominator reads as the whole capital programme when it is a
+				// quarter of it, and the gap is not evenly spread — several agencies
+				// publish no location at all.
+				coverage = (fc && fc.coverage) ? fc.coverage : null;
+				jQuery('#mapCoverageNote').text(coverage && coverage.note
+					? coverage.note
+					: 'Location coverage is not available right now.');
+				window.CAP_MAP_COVERAGE = coverage;
+				markLocated();
+				if (pending) { pending = false; draw('all'); }
+			},
+			error: function () {
+				// ⚠⚠ A FAILED REQUEST IS NOT AN EMPTY MAP. Saying nothing here draws
+				// zero pins and reads as "no project in this scope has a location",
+				// which is a claim about the City rather than about this page.
+				features = [];
+				located = new Set();
+				jQuery('#mapCoverageNote').text('Project locations could not be '
+					+ 'loaded. This is a problem with this page, not a statement '
+					+ 'about the capital programme.');
+				window.CAP_MAP_FEATURES = null;
+			},
+			complete: function () {
+				fetching = false;
+				window.CAP_MAP_DONE = true;
+			}
+		});
+	}
+
+	return {init: init, ready: ready, draw: draw, markLocated: markLocated,
+			isLocated: isLocated, zoomTo: zoomTo,
+			coverage: function () { return coverage; }};
+})();
+
+
 /** /projects map ******************************************/
 
 
@@ -692,16 +922,141 @@ function copyLink() {
 function fapireq(url, cb) {
 	$.ajax({
 		url: url,
+		// ⚠⚠ THE API SERVES TWO PAYLOAD SHAPES AND THIS HANDLED ONE, so on the
+		// other it called back a BARE ARRAY — where `resp.data` is `undefined`.
+		// DataTables' own ajax callback then read `.length` off that undefined
+		// and threw `Cannot read properties of undefined (reading 'length')`.
+		// Measured 2026-09-10: **1 uncaught error on 5 of 5 org profiles**
+		// tested, from `/get/orgs/section/{id}/nycjobs`, which returns a bare
+		// `[]`. And it is not an edge case there — of that page's ~44 payloads,
+		// 14 carry a `rows` key and ~30 are bare lists
+		// (`/get/orgs/stats-reg/{id}/{tbl}` returns `[{"count":0}]`).
+		//
+		// ⚠⚠ AND THE ERROR BRANCH BELOW WAS ALREADY FIXED, with a comment
+		// explaining that a failed request is not an empty result. So one branch
+		// returned `{data: …}` and the other returned an array: the
+		// fixed-one-branch pattern this repo records for `_cached` in
+		// `nycha.py`, where two sibling routers had the same defect and one had
+		// been treated.
+		//
+		// ⚠ A bare list is always DATA, never an error: FastAPI's own error
+		// payload is `{"detail": …}`, a dict. And a non-JSON body arrives as a
+		// string, which is neither shape and falls to `unexpected` below.
+		//
+		// ⚠ THREE STATES ARE KEPT, because they are three different claims —
+		// the rule `schoolStatTiles` already relies on:
+		//     {data: rows}              the request answered, with or without rows
+		//     {data: [], unexpected}    it answered in a shape we do not read
+		//     {data: [], error, status} we could not ask
+		// Collapsing `unexpected` into a plain empty result would make "the
+		// endpoint returned something we cannot read" indistinguishable from
+		// "the query matched nothing", which is this repo's oldest defect.
 		success: function (data) {
-			//console.log('raw', data)
-			cb(data['rows'] ? { 'data': data['rows'] } : [])
+			if (data && data['rows'])
+				cb({ 'data': data['rows'] })
+			else if (Array.isArray(data))
+				cb({ 'data': data })
+			else
+				cb({ 'data': [], 'unexpected': true })
 		},
 		error: function (jqXHR, textStatus, errorThrown) {
-			cb({ 'data': [], 'error': errorThrown })
+			// A FAILED REQUEST IS NOT AN EMPTY RESULT. Callers used to see only
+			// an empty `data` and treat it as "this dataset has no records" --
+			// the same defect as a search group that returns [] because its
+			// query is broken. `status` is carried so a caller can tell a 429
+			// (we throttled our own page) from a 500 from a genuine empty set.
+			cb({ 'data': [], 'error': errorThrown || textStatus || 'request failed',
+			     'status': jqXHR.status })
 		}
 	})
 }
 /** /fapi requests ******************************************/
+
+
+/** school stat tiles ******************************************/
+
+/**
+ * Fill the six school stat tiles from a `/get/schools/sdstats/...` payload.
+ *
+ * ⚠⚠ `fapireq` HANDS BACK THREE DIFFERENT SHAPES AND ONLY ONE CARRIES A ROW.
+ * On success it calls back `{data: rows}`; on a transport or HTTP failure
+ * `{data: [], error, status}`; and on a payload it cannot read,
+ * `{data: [], unexpected: true}`. Both callers used to read
+ * `resp.data[0].schools_no` straight off, so two of those three shapes threw
+ * `Cannot read properties of undefined (reading 'schools_no')` and took the
+ * rest of the ready handler down with them. The endpoint returns exactly one
+ * row when it succeeds (api/main.py `get_schools_global_stats`), so no row
+ * means the request did not succeed -- never "this district has no schools".
+ *
+ * ⚠ CORRECTED 2026-09-10: the third shape used to be a BARE ARRAY, and this
+ * comment described it as such. That was the source of an uncaught TypeError on
+ * every org profile, because DataTables' own callback reads `.data.length`.
+ * `fapireq` now always calls back an OBJECT, and it reads a bare list as data —
+ * which is what `/get/orgs/*` actually serves for ~30 of an org profile's ~44
+ * payloads. This function needed no change; it was already defensive.
+ *
+ * ⚠ A FAILED REQUEST IS NOT AN EMPTY DISTRICT. Six blank tiles are
+ * indistinguishable from a district with nothing in it, which is this repo's
+ * oldest defect. The tiles get an em dash and `noteId`, when the page
+ * provides it, says which of the two happened -- `error`/`status` are set by
+ * fapireq's error branch alone, so their presence is what separates "we could
+ * not ask" from "it answered with nothing".
+ *
+ * Returns true when real figures were rendered.
+ */
+function schoolStatTiles(resp, noteId, tiles) {
+	// ⚠⚠ THE TILE LISTS ARE A PARAMETER BECAUSE THE THIRD CONSUMER DOES NOT HAVE
+	// THE SAME TILES, and hardcoding them is what made this function un-adoptable.
+	// /schools and /d/{sd} share one set; the SCHOOL PROFILE (/s/{code}) has no
+	// `schools_no` — it is one school — and does have `povetry_perc`, which is
+	// neither a count nor money and takes no formatter at all.
+	//
+	// ⚠ The default reproduces the original two callers EXACTLY, so they did not
+	// change. Forking this function for the third page is precisely how
+	// distsection came to hold /schools' unguarded `resp.data[0]` read verbatim,
+	// and then had to be fixed twice.
+	//
+	// ⚠ `povetry_perc` is passed through RAW on purpose: the endpoint serves
+	// either a percentage or the literal string 'N/A' when no demographics row
+	// exists (api/main.py `get_school_stats`), and 'N/A' is the publisher's own
+	// answer — running it through a number formatter would turn a real answer
+	// into NaN.
+	var TILES = tiles || { count: ['schools_no', 'students_no', 'prj_no'],
+	                       money: ['prj_budget', 'prj_costs', 'pcosts_per_student'] };
+	var COUNT_TILES = TILES.count || [];
+	var MONEY_TILES = TILES.money || [];
+	var PLAIN_TILES = TILES.plain || [];
+	var rows = (resp && resp.data) ? resp.data : null;
+	var row = (rows && rows.length) ? rows[0] : null;
+	var note = noteId ? document.getElementById(noteId) : null;
+
+	if (!row) {
+		COUNT_TILES.concat(MONEY_TILES).concat(PLAIN_TILES).forEach(function (id) {
+			$('#' + id).text('\u2014');
+		});
+		if (note) {
+			note.textContent = (resp && resp.error)
+				? 'These figures could not be loaded (' +
+				  (resp.status ? 'HTTP ' + resp.status : resp.error) +
+				  '). That is a problem with this page, not a statement about the schools.'
+				: 'These figures are not available right now.';
+			note.style.display = '';
+		}
+		return false;
+	}
+
+	if (note) {
+		note.textContent = '';
+		note.style.display = 'none';
+	}
+	COUNT_TILES.forEach(function (id) { $('#' + id).text(commaThousands(row[id])); });
+	MONEY_TILES.forEach(function (id) { $('#' + id).text(toFinShortK(row[id])); });
+	PLAIN_TILES.forEach(function (id) {
+		$('#' + id).text(row[id] != null ? row[id] : '\u2014');
+	});
+	return true;
+}
+/** /school stat tiles ******************************************/
 
 
 /** slugged urls ******************************************/

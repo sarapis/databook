@@ -56,7 +56,51 @@
 		$(document).ready(function() {
 			datatable = $('#myTable').DataTable({
 				ajax: function (url, cb) {
-					fapireq("{!! $url !!}", cb);
+					fapireq("{!! $url !!}", function (payload) {
+						cb(payload);
+						// ⚠ Only on a genuinely empty result. A section with rows must
+						// never show the note, or it becomes wallpaper and stops meaning
+						// anything — the "worth consolidating?" badge lesson.
+						try {
+							// ⚠⚠ A FAILED REQUEST IS NOT AN EMPTY RESULT. fapireq returns
+							// {data: [], error, status} on failure, so without this a 500
+							// or a 429 would render "this dataset does not list this
+							// organization" — a confident coverage claim made from a
+							// broken request. fapireq's own comment warns about this and
+							// the first version of the note ignored it.
+							if (payload && payload.error) { return; }
+							var rows = (payload && (payload.data || payload.rows)) || payload;
+							if (Array.isArray(rows) && rows.length === 0) {
+								$('#section-scope-note').show();
+								$.getJSON("{!! $coverageUrl !!}", function (c) {
+									var n = c && c.rows && c.rows[0] && c.rows[0].orgs;
+									if (n) {
+										$('#section-scope-detail').text(
+											'This dataset covers ' + n + ' organizations in total.');
+									}
+								});
+								$.getJSON("{!! $contractWorkUrl !!}", function (w) {
+									var r = (w && w.rows) || [];
+									if (!r.length) { return; }
+									var total = 0, html = '';
+									r.forEach(function (c) {
+										var amt = parseFloat(c.amount) || 0; total += amt;
+										html += '<tr><td>' + (c.ctr_id || c.contract_id || '') + '</td><td>' +
+											(c.agency || '') + '</td><td>' + (c.contract_title || '') + '</td><td>' +
+											(c.start_date || '') + '</td><td>' + (c.end_date || '') +
+											'</td><td class="text-end">$' +
+											amt.toLocaleString(undefined, {maximumFractionDigits: 0}) + '</td></tr>';
+									});
+									$('#ocw-body').html(html);
+									$('#ocw-summary').text(
+										r.length + ' contract' + (r.length === 1 ? '' : 's') +
+										', $' + (total / 1e6).toLocaleString(undefined,
+											{maximumFractionDigits: 1}) + 'M in total.');
+									$('#org-contract-work').show();
+								});
+							}
+						} catch (e) { /* the note is a nicety; never break the table */ }
+					});
 			    },
 					
 				buttons: [{
@@ -227,6 +271,56 @@
 						@endif
 					</h4>
 					<p>{!! nl2br($details['description'] ?? ($dataset['Descripton'] ?? '')) !!}</p>
+					{{-- ⚠⚠ AN EMPTY SECTION TABLE IS AMBIGUOUS AND RESOLVES THE
+					     REASSURING WAY. Every org is offered every section, so a body
+					     the dataset does not cover renders an empty table that reads
+					     as "this organization has none" rather than "this dataset does
+					     not list organizations like this one". Revealed by JS ONLY when
+					     the table actually returns zero rows, so a populated section
+					     never shows it. --}}
+					<div id="section-scope-note" class="db-alert db-alert-info mt-3" style="display:none">
+						<div class="db-alert-body">
+							<i class="bi bi-info-circle"></i> <strong>Nothing here for this organization.</strong>
+							<span id="section-scope-detail"></span>
+							An empty table means this dataset does not list this organization &mdash;
+							not necessarily that no such activity exists. Datasets cover different sets
+							of bodies: the capital plan, for example, lists only the agencies that hold
+							their own capital budget lines.
+						</div>
+					</div>
+
+					{{-- ⚠ THE OTHER LENS. A body that is not a City agency can still do
+					     substantial City work — as a VENDOR. Shown only when the
+					     agency-keyed section is empty AND we have a curated, EXACT vendor
+					     name for this org, so it can never appear speculatively. --}}
+					<div id="org-contract-work" class="mt-3" style="display:none">
+						<h5 class="mb-1">Work delivered under contract</h5>
+						<p class="db-text-muted" style="font-size:var(--db-text-sm)">
+							This organization is not an agency in the dataset above, but the City
+							contracts <em>with</em> it. <span id="ocw-summary"></span>
+						</p>
+						<div class="table-responsive">
+							<table class="db-table table-striped" style="width:100%">
+								<thead><tr>
+									<th>Contract</th><th>Agency</th><th>Title</th>
+									<th>Start</th><th>End</th><th class="text-end">Amount</th>
+								</tr></thead>
+								<tbody id="ocw-body"></tbody>
+							</table>
+						</div>
+					</div>
+					@if ($section == 'jobs')
+						<div class="db-alert db-alert-info mt-3">
+							<div class="db-alert-body">
+								<i class="bi bi-info-circle"></i> <strong>Scope:</strong> this is the City's
+								<strong>central careers portal</strong> only. Employers that run their own hiring
+								systems do not appear here &mdash; including the Department of Education, CUNY,
+								the Board of Elections, the City Council, the District Attorneys and the Borough
+								Presidents. So this is <strong>not a count of every City vacancy</strong>, and an
+								agency showing no openings may simply hire elsewhere.
+							</div>
+						</div>
+					@endif
 					@if ($map ?? null)
 						<button id="map_button" class="btn map_btn" style="float:right;" onclick="toggleMap();"><img src="/img/map_location.png"></button>
 					@endif

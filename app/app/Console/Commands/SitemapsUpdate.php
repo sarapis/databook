@@ -88,7 +88,11 @@ class SitemapsUpdate extends Command
 			foreach (['cc', 'cd', 'nta'] as $type)
 			{
 				$fn = public_path("data/{$type}.geojson");
-				$title = ['cc' => 'City Council District ', 'cd' => 'Community District ', 'nta' => ''][$type];
+				// ⚠ ONE OWNER (App\Custom\DistrictName). This was the FOURTH copy of the
+				// prefix map, and it was found by the guard rather than by grep — my own
+				// search had truncated at `head -20`. Like the sitemap controller's copy
+				// it carried no `sd` key, harmless only because this loop never asks.
+				$title = \App\Custom\DistrictName::PREFIX[$type];
 				$geojson = json_decode(file_get_contents($fn), true);
 				$f = $type == 'nta' ? 'nameAlt' : 'nameCol';
 				foreach ($geojson['features'] as $d)

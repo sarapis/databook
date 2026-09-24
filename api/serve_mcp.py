@@ -202,8 +202,14 @@ async def combined_app(scope, receive, send):
         headers = dict(scope.get("headers", []))
         # MCP session ID is sent in the mcp-session-id header
         session_id = headers.get(b"mcp-session-id", b"").decode("utf-8")
+        # ⚠ The User-Agent is carried so usage analytics can exclude our own
+        # daily tool audit, which is otherwise indistinguishable from a real
+        # session (sessions are opaque ids). Headers only — deliberately NOT
+        # `initialize`'s clientInfo, which would mean buffering and replaying
+        # this streaming transport's receive channel.
+        user_agent = headers.get(b"user-agent", b"").decode("utf-8", "replace")
         if session_id:
-            set_session_id(session_id)
+            set_session_id(session_id, user_agent)
     
     # Fall through to MCP app for all other requests
     await mcp_app(scope, receive, send)

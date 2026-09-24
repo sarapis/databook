@@ -162,12 +162,9 @@ class OrgChart
 		{
 			$kids = $node['children'];
 			uksort($kids, function ($a, $b) {
-				$idx = array_flip(self::BRANCH_ORDER);
-				$a = $idx[$a] ?? $a;
-				$a = preg_match('~\d~', (string)$a) ? (int)preg_replace('~\D~si', '', $a) : $a;
-				$b = $idx[$b] ?? $b;
-				$b = preg_match('~\d~', (string)$b) ? (int)preg_replace('~\D~si', '', $b) : $b;
-				return $a <=> $b;
+				$ka = self::siblingKey((string)$a);
+				$kb = self::siblingKey((string)$b);
+				return ($ka[0] <=> $kb[0]) ?: ($ka[1] <=> $kb[1]) ?: strcmp($ka[2], $kb[2]);
 			});
 			$children = [];
 			foreach (array_values($kids) as $childKey)
@@ -176,6 +173,37 @@ class OrgChart
 		}
 
 		return $rr;
+	}
+
+	/**
+	 * The sort key for a child, by NAME: [group, number, name].
+	 *
+	 * ⚠⚠ THE COMPARATOR THIS REPLACES MIXED TYPES, AND PHP 8 CHANGED WHAT THAT
+	 * MEANS. It turned a branch name into its index, any name containing a digit
+	 * into the integer of ALL its digits (`Bronx Community Board # 1` -> 1,
+	 * `NYC311` -> 311), and left every other name a string, then returned
+	 * `$a <=> $b` across the three. PHP 7 cast the string to 0 for that
+	 * comparison; PHP 8 casts the int to a string (the "saner string to number
+	 * comparisons" RFC), so `"311"` now sorts before `"Cyber Command"`.
+	 * Measured on prod's 318 chart rows: 2 of 36 sibling groups reordered under
+	 * PHP 8.4 — Borough Boards fell from first to last under the Bronx Borough
+	 * President, and NYC311 jumped from last to first under OTI.
+	 *
+	 * The key keeps each comparison single-typed (int with int, then a byte
+	 * comparison of names), so the order no longer depends on the PHP version.
+	 * The groups reproduce what the chart has shown until now: branches in their
+	 * declared order, then plain names alphabetically, then numbered names by
+	 * number — verified identical to PHP 7.4's output on every sibling group.
+	 */
+	protected static function siblingKey(string $name): array
+	{
+		static $branch = null;
+		$branch = $branch ?? array_flip(self::BRANCH_ORDER);
+		if (isset($branch[$name]))
+			return [0, $branch[$name], $name];
+		if (preg_match('~\d~', $name))
+			return [2, (int)preg_replace('~\D~', '', $name), $name];
+		return [1, 0, $name];
 	}
 
 	/** Total nodes in a built tree — used for the view toggle's counts. */

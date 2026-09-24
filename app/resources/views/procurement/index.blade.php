@@ -97,41 +97,16 @@
             </div>
         </div>
 
-        {{-- Capital Projects — mini dashboard (CPDB cost data + Checkbook capital spending) --}}
-        <div class="d-flex flex-wrap justify-content-between align-items-end mb-3 mt-4" style="gap:var(--db-space-2);">
-            <div>
-                <div class="db-eyebrow">Capital Program</div>
-                <h3 class="mb-1">Capital Projects</h3>
-                <p class="db-page-lead mb-0">The City's managed capital program &mdash; project cost and budget variance, plus actual capital spending. Source: NYC Capital Projects Database &amp; Checkbook NYC.</p>
-            </div>
-            <a href="{{ route('capital') }}" class="db-btn db-btn-primary"><i class="bi bi-buildings"></i> Explore Capital Projects</a>
-        </div>
-        {{-- Same globStats fields, labels + ×1000 scaling as /projects/capital so figures match exactly --}}
-        <div class="db-stat-grid mb-4">
-            <a href="{{ route('capital') }}" class="db-stat" style="text-decoration:none;">
-                <div class="db-stat-label">Number of Projects</div>
-                <div class="db-stat-value prj_stat gs_thousandscomma" id="projects_no">&nbsp;</div>
-            </a>
-            <a href="{{ route('capital') }}" class="db-stat" style="text-decoration:none;">
-                <div class="db-stat-label">Original Cost</div>
-                <div class="db-stat-value prj_stat gs_finshort" data-multiplier="1000" id="orig_cost">&nbsp;</div>
-            </a>
-            <a href="{{ route('capital') }}" class="db-stat is-accent" style="text-decoration:none;">
-                <div class="db-stat-label">Current Cost</div>
-                <div class="db-stat-value prj_stat gs_finshort" data-multiplier="1000" id="curr_cost">&nbsp;</div>
-            </a>
-            <a href="{{ route('capital') }}" class="db-stat" style="text-decoration:none;">
-                <div class="db-stat-label">Amount Over Budget</div>
-                <div class="db-stat-value prj_stat gs_finshort" data-multiplier="1000" id="over_budg_am">&nbsp;</div>
-            </a>
-        </div>
-        {{-- Actual capital spending by fiscal year — Checkbook 'Capital Contracts' payments (cash paid out; distinct from the CPDB budget/cost figures above) --}}
-        @if(!empty($capitalSpend['values']))
-        <div class="db-card mb-5" style="overflow:hidden; padding:var(--db-space-4);">
-            <div class="db-chart-head"><span class="db-chart-title">Actual Capital Spending by Fiscal Year @include('procurement.partials.source_badge', ['source' => 'checkbook'])</span></div>
-            <div class="db-chart-body" style="height: 280px;"><canvas id="capitalSpendChart"></canvas></div>
-        </div>
-        @endif
+        {{-- ⚠ THE CAPITAL SECTION MOVED TO /projects (owner request, 2026-09-09).
+             It was added here 2026-07-13 (`eaad8a9`) when no rebuilt capital
+             section existed and CheckbookNYC published no capital feed, so a
+             procurement page was the only place those figures could live. With
+             /projects and /projects/about built it was the same numbers in two
+             places — which is exactly what produced the 5,128-vs-12,929
+             disagreement between this page and the rebuilt Overview.
+             ⚠ `$capital` and `$capitalSpend` are no longer passed by
+             ProcurementController either; a view-data key kept for a block that
+             no longer exists is how a payload quietly goes stale. --}}
 
         {{-- Quick Actions --}}
         <h3 class="mb-3 mt-4">Explore Data</h3>
@@ -182,25 +157,6 @@
                 }
             }
         };
-
-        // Actual Capital Spending by Fiscal Year (Bar) — Checkbook 'Capital Contracts'
-        var capEl = document.getElementById('capitalSpendChart');
-        if (capEl) {
-            new Chart(capEl, {
-                type: 'bar',
-                data: {
-                    labels: {!! json_encode($capitalSpend['labels'] ?? []) !!},
-                    datasets: [{
-                        label: 'Capital Spending',
-                        data: {!! json_encode($capitalSpend['values'] ?? []) !!},
-                        backgroundColor: DBChart.navy, borderRadius: 4
-                    }]
-                },
-                options: { ...commonOptions, plugins: { ...commonOptions.plugins, legend: { display: false } },
-                    scales: { y: { beginAtZero: true, grid: { color: DBChart.grid }, ticks: { callback: money } }, x: { grid: { display: false } } }
-                }
-            });
-        }
 
         // Time Chart (Line with area)
         new Chart(document.getElementById('timeChart'), {

@@ -210,6 +210,19 @@
                         $contractLabel = ($tx['passport_contract_id'] ?? '') ?: ($tx['contract_id'] ?? '—');
                         $primeRaw = $tx['associated_prime_vendor'] ?? '';
                         $prime = ($primeRaw !== '' && $primeRaw !== 'N/A') ? $primeRaw : $payee;
+                        // ⚠ COMPOSED HERE, NOT WITH INLINE DIRECTIVES. Blade only compiles an
+                        // at-directive preceded by a NON-word character (its regex opens
+                        // with \B), so the inline form `...Emerging` + endif never compiled:
+                        // prod printed that raw Blade, PHP source included, into the detail
+                        // panel of every row carrying an M/WBE category. Only fixed strings
+                        // are appended, so the {!! !!} below echoes no request data.
+                        $mwbeSuffix = '';
+                        if (($tx['woman_owned_business'] ?? '') === 'Yes') {
+                            $mwbeSuffix .= ' · <span style="color: var(--db-accent);">Woman-owned</span>';
+                        }
+                        if (($tx['emerging_business'] ?? '') === 'Yes') {
+                            $mwbeSuffix .= ' · Emerging';
+                        }
                     @endphp
                     <tr class="se-row" data-target="det-{{ $i }}" style="cursor: pointer;">
                         <td style="color: var(--db-gray-500);"><button type="button" class="db-row-toggle" aria-expanded="false" aria-label="Expand row"><i class="bi bi-chevron-right"></i></button></td>
@@ -232,7 +245,7 @@
                                 <div><dt>Expense category</dt><dd>{{ ($tx['expense_category'] ?? '') ?: '—' }}</dd></div>
                                 <div><dt>Prime vendor</dt><dd>{{ $prime }}</dd></div>
                                 @if(array_key_exists('mwbe_category', $tx))
-                                <div><dt>M/WBE category</dt><dd>{{ ($tx['mwbe_category'] ?? '') ?: '—' }}@if(($tx['woman_owned_business'] ?? '') === 'Yes') · <span style="color: var(--db-accent);">Woman-owned</span>@endif@if(($tx['emerging_business'] ?? '') === 'Yes') · Emerging@endif</dd></div>
+                                <div><dt>M/WBE category</dt><dd>{{ ($tx['mwbe_category'] ?? '') ?: '—' }}{!! $mwbeSuffix !!}</dd></div>
                                 @endif
                                 @if($ctrId)
                                 <div style="grid-column: 1 / -1;"><a href="{{ route('procurement.contract', ['id' => $ctrId]) }}" style="font-weight: var(--db-weight-semibold);">View contract {{ $contractLabel }} <i class="bi bi-arrow-right"></i></a></div>

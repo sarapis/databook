@@ -222,13 +222,28 @@ class TestProcurementTableIndexes:
 
     def test_index_hook_runs_before_the_other_hooks(self):
         """`vendors` carries three enrichment hooks that query it by name, so
-        the index rebuild must come first or they seq-scan an unindexed table."""
+        the index rebuild must come first or they seq-scan an unindexed table.
+
+        ⚠ The second assertion pins the exact hook LIST, not just its length. It
+        was `len(...) == 4` and correctly failed when the vendor-id-map
+        invalidation was added 2026-09-01 — a guard failing because you changed
+        the thing it guards is it working, so it is updated rather than relaxed.
+        Naming the hooks is strictly stronger than counting them: a swap that
+        keeps the count is now caught too.
+        """
         from data_scheduler import POST_INGEST_HOOKS
-        first = POST_INGEST_HOOKS["vendors"][0]
-        assert first.__name__ == "<lambda>", (
+        hooks = POST_INGEST_HOOKS["vendors"]
+        assert hooks[0].__name__ == "<lambda>", (
             "the index-recreation lambda must be first in vendors' hook list"
         )
-        assert len(POST_INGEST_HOOKS["vendors"]) == 4
+        assert [h.__name__ for h in hooks[1:]] == [
+            "derive_vendor_enrichment_hook",
+            "derive_doing_business_hook",
+            "derive_org_vendor_hook",
+            # Drops the cached vendorids map — `vendors` is DROP+RENAMEd on every
+            # ingest, so this is the moment that map goes stale.
+            "invalidate_vendor_id_map_hook",
+        ], f"vendors' hook list changed: {[h.__name__ for h in hooks]}"
 
     def test_recreate_creates_each_index_then_analyzes(self):
         """A brand-new index on a just-renamed table is ignored by the planner
@@ -279,3 +294,95 @@ class TestProcurementTableIndexes:
         _all = len(TABLE_INDEXES["contracts"]) + len(searchindexes.for_table("contracts"))
         assert sum("CREATE INDEX" in s for s in run) == _all - 1
         assert run[-1] == 'ANALYZE "contracts"'
+
+
+# --------------------------------------------------------------------------
+# The ingest guard: a CALENDAR DAY, not a 24-hour delta.
+# --------------------------------------------------------------------------
+
+def test_the_14_second_skip_that_cost_a_days_ingest():
+    """⚠⚠ THE REGRESSION THIS EXISTS TO PREVENT, with the real timestamps.
+
+    Observed on prod 2026-08-29: the cycle ran at 04:01:10.468 while contracts'
+    stamp was 04:01:24.742 the previous day — 23:59:45.726 apart, so the old
+    `.days < 1` test skipped contracts, solicitations and vendors by FOURTEEN
+    SECONDS, and no ingest happened that day at all.
+    """
+    from datetime import datetime, timezone
+    from data_scheduler import already_ingested_today
+    last = datetime(2026, 8, 28, 4, 1, 24, 742212, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 29, 4, 1, 10, 468579, tzinfo=timezone.utc)
+    assert (now - last).days < 1, 'the old delta test would have skipped'  # the bug
+    assert already_ingested_today(last, now) is False, (
+        'a different calendar day is being reported as "already ingested today" — '
+        'this is the 14-second skip returning')
+
+
+def test_a_second_cycle_on_the_same_day_still_skips():
+    """The guard's real job: a deploy-triggered cycle must not re-ingest a
+    55,806-row table minutes after the scheduled one did."""
+    from datetime import datetime, timezone
+    from data_scheduler import already_ingested_today
+    last = datetime(2026, 8, 29, 4, 1, 24, tzinfo=timezone.utc)
+    for hour in (4, 11, 23):
+        now = datetime(2026, 8, 29, hour, 30, tzinfo=timezone.utc)
+        assert already_ingested_today(last, now) is True, f'{hour}:30 re-ingested'
+
+
+def test_the_accepted_price_a_cycle_just_after_midnight_re_ingests():
+    """⚠ RECORDED, NOT AVOIDED. A calendar test re-ingests when a cycle runs
+    shortly after midnight on something ingested late the evening before. That
+    is one extra ingest, occasionally, and it is the price of removing the
+    coupling to what time of day the previous ingest happened to occur.
+
+    Asserted so the trade-off is visible and a future change to it is a
+    deliberate decision rather than a surprise."""
+    from datetime import datetime, timezone
+    from data_scheduler import already_ingested_today
+    last = datetime(2026, 8, 28, 23, 50, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 29, 0, 5, tzinfo=timezone.utc)
+    assert already_ingested_today(last, now) is False
+
+
+def test_a_future_stamp_does_not_re_ingest_forever():
+    """⚠ `>=`, not `==`. A clock skew or a restored backup can leave a stamp in
+    the future; with `==` that would re-ingest on every single cycle."""
+    from datetime import datetime, timezone
+    from data_scheduler import already_ingested_today
+    last = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+    assert already_ingested_today(last, now) is True
+
+
+def test_no_stamp_means_never_ingested():
+    from datetime import datetime, timezone
+    from data_scheduler import already_ingested_today
+    now = datetime(2026, 8, 29, 4, 1, tzinfo=timezone.utc)
+    assert already_ingested_today(None, now) is False
+
+
+def test_the_day_delta_guard_does_not_come_back():
+    """⚠ A source guard, because the defect is a one-line revert away and its
+    symptom — a dataset quietly not ingesting — is invisible for days."""
+    import ast
+    import io
+    import os
+    src = os.path.join(os.path.dirname(__file__), '..', 'data_scheduler.py')
+    with io.open(src, encoding='utf-8') as fh:
+        tree = ast.parse(fh.read())
+    # strip docstrings, or this fires on the prose explaining the trap
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            b = node.body
+            if (b and isinstance(b[0], ast.Expr)
+                    and isinstance(b[0].value, ast.Constant)
+                    and isinstance(b[0].value.value, str)):
+                node.body = b[1:]
+    code = ast.unparse(tree)
+    assert '.days < 1' not in code, (
+        'the 24-hour delta guard is back; it skips a whole day whenever the '
+        'previous ingest happened later in the day than the current cycle')
+    assert 'already_ingested_today' in code, 'the calendar-day helper is gone'
+    # and prove the scanner is reading real code, not an empty tree
+    assert 'process_extractor_dataset' in code, 'the scanner is not seeing the module'

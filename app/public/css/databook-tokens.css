@@ -56,7 +56,23 @@
   --db-bg-tertiary:   var(--db-gray-050);
   --db-bg-band:       var(--db-navy-050);  /* section bands */
   --db-text:          var(--db-gray-900);
-  --db-text-muted:    var(--db-gray-600);
+  /* ⚠⚠ NOT `var(--db-gray-600)` ANY MORE, AND THE REASON IS A MEASUREMENT THAT
+     CONTRADICTED THE PLAN THAT PROPOSED IT. `#757575` on white is **4.61:1** —
+     AA for normal text, AAA nowhere — while the Bootstrap `.text-muted` it was
+     about to replace composites to `#585c5e` = **6.76:1**. So adopting the
+     token as it stood would have DROPPED contrast on every muted string on the
+     site while looking like a consistency win. (The plan's proposed `#616161`
+     is 6.19:1, also a regression; its "≈6.9:1" was wrong — recomputed here.)
+     `#595959` is **7.00:1**: AAA for normal text, and better than what it
+     replaces, so nothing gets worse anywhere.
+     ⚠ THE FIX IS ON THE SEMANTIC TOKEN, NEVER ON `--db-gray-600`. That grey is
+     in the shared `wegovnyc-design-tokens` reference tier (present in
+     `wegovnyc-core.snapshot.css`), so moving it fails `test_design_token_parity`
+     until the package moves too — and its values are shared with wegov.nyc and
+     UNNYC, which is not Databook's call to make alone. `--db-text-muted` is
+     Databook-only (absent from the snapshot), which is exactly what a semantic
+     tier is for. */
+  --db-text-muted:    #595959;   /* 7.00:1 on white — see above */
   --db-text-on-navy:  #eef3f9;
   --db-text-on-navy-muted: #aebfd4;
   --db-border:        var(--db-gray-300);
@@ -88,6 +104,21 @@
   /* ---- BRAND (Analysis / orange) soft fills ------------------------------ */
   --db-brand-bg:   #fff3e6;   /* orange pill bg, analysis menu hover */
   --db-brand-wash: #fff8f0;   /* orange analysis banner bg */
+  /* ⚠⚠ TEXT ON THE TWO FILLS ABOVE. Every other semantic family here ships a
+     -fg beside its -bg; the brand family did not, so an author wanting "orange
+     text on the orange fill" had only --db-brand to reach for — and that is the
+     saturated identity colour, meant for borders, fills and text on NAVY. Five
+     rules made that same reasonable choice and every one failed WCAG AA:
+     #ff941f on --db-brand-bg is 2.02:1 and on --db-brand-wash 2.10:1, against
+     the 4.5:1 that 13px bold needs (WCAG large text starts at 18.66px bold).
+     The missing token, not five bad values, was the defect.
+     #8f4e00 measures 5.90 on -bg, 6.12 on -wash and 6.45 on white — clears AA
+     with headroom and still reads as the orange family rather than drifting to
+     amber (--db-warning-fg #7a5408 would pass at 6.20 but says "warning" where
+     the design means "analysis").
+     ⚠ --db-brand stays correct on DARK and must not be replaced there:
+     6.16:1 on the header navy, 5.16:1 on navy-600. */
+  --db-brand-fg:   #8f4e00;   /* orange TEXT/icon on -bg or -wash (AA on both) */
 
   /* ---- TYPE -------------------------------------------------------------- */
   --db-font-sans: 'Public Sans', 'Inter', -apple-system, BlinkMacSystemFont,
@@ -152,6 +183,10 @@
   --db-container-max: 1280px;
   --db-header-h: 56px;
   --db-submenu-h: 44px;
+  /* Third-level bar: the Digital Services Analysis section nav. It stacks
+     UNDER the other two, so anything that offsets itself from the chrome
+     must add this height only on pages where the bar renders. */
+  --db-subsubmenu-h: 40px;
 
   /* ---- MOTION ------------------------------------------------------------ */
   --db-transition: 0.18s ease;       /* @kind other */

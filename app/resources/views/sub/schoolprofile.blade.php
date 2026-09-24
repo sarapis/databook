@@ -197,6 +197,18 @@
 			<div class="db-stat"><div class="db-stat-label">Project Costs</div><div class="db-stat-value prj_stat" id="prj_costs">&nbsp;</div></div>
 			<div class="db-stat"><div class="db-stat-label">Project Cost per Student</div><div class="db-stat-value prj_stat" id="pcosts_per_student">&nbsp;</div></div>
 		</div>
+		{{-- ⚠ A FAILED STATS REQUEST IS NOT A SCHOOL WITH NO DATA. Written by
+		     `schoolStatTiles`; hidden while the figures are fine. Without it six
+		     em dashes are indistinguishable from a school the City has never
+		     spent anything on.
+		     ⚠⚠ IT SITS OUTSIDE `.db-stat-grid`, AS IT DOES ON THE OTHER TWO
+		     PAGES, AND THAT IS NOT COSMETIC. The grid is
+		     `repeat(auto-fit, minmax(165px, 1fr))`, so a <p> inside it is a GRID
+		     ITEM: measured at 1440 it rendered **186x110px** — a seventh
+		     tile-shaped cell of wrapped text, against **1376x21** here. The
+		     element existed, was visible and held the right sentence in both
+		     positions, so only looking at the box caught it. --}}
+		<p id="schoolStatsNote" class="text-muted small mb-0" style="display:none;"></p>
 	</div>
 
 

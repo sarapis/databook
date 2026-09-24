@@ -1,0 +1,53 @@
+program_slug,program_name,rule,value,note
+# Curated program membership. ONE ROW PER DECISION.
+#
+# rule=contract  value=<contract_id>  a human says this contract IS a member
+# rule=token     value=<title token>  every contract whose title contains this
+#                                     token is a member (case-insensitive)
+# rule=exclude   value=<contract_id>  never a member, even if a token matches it
+#
+# ⚠ MUST BE REAL QUOTED CSV — contract titles and notes contain commas, and
+# hand-splitting on commas mangled 47 of 212 rows in the NYCHA review (#155).
+#
+# ⚠ A `token` rule is a HUMAN DECISION, not a heuristic. It is admitted here
+# because the title token was measured at ZERO false positives on the worked
+# example (10 of 10 matches real) — but only as an EXPANDER, given the token.
+# As a DISCOVERER it is useless: gated to 3-40 contracts / >=2 vendors / >=$5M
+# it still yields 1,767 candidates, and ranked by value the top of that list is
+# COMMERCIAL, HOTEL, CAMERA, COST, ENHANCED — generic nouns, not programs,
+# with PASSPORT far below them. So tokens are typed here by someone who has
+# seen what they match; discovery is the co-termination worksheet's job.
+#
+# ⚠ Whoever adds a token must run `--report` and read the members it admits.
+#
+# ⚠⚠ A TOKEN IS A RAW SUBSTRING ON THE LOWERCASED TITLE — IT DOES NOT NORMALISE.
+# The candidate EXTRACTOR normalises (it strips non-alphanumerics, so `EMS CAD`
+# and `EMSCAD` share one key and merge), but this seed does not. So a program
+# written two ways needs TWO token rows; `emscad` below is the worked example.
+#
+# ⚠⚠ AND THE FALSE-POSITIVE CHECK MUST RUN OVER **ALL** CONTRACTS, NOT THE TECH
+# UNIVERSE. Membership is deliberately unscoped (38,967 rows) while the
+# discovery worksheet is tech-only (4,397) — see the module docstring. I first
+# measured these tokens on the tech set and got different, smaller answers for
+# HERRC, Fair Fares and IDNYC. Re-measured through `fetch_rows()` itself: all
+# eleven tokens return ZERO matches where the name is not at a word start.
+#
+# ⚠ `why` CARRIES THE REASONING; THE PAGE CARRIES THE NUMBERS. The program block
+# renders contracts / vendors / agencies / value live, directly above this text,
+# so a scope figure typed here goes stale the moment an ingest moves it — the
+# #240 defect, which I reintroduced in the first draft of these very rows and
+# which api/tests/test_program_groups.py now guards. Figures the page CANNOT
+# derive are still welcome: a single contract's role, an external fact.
+passport,PASSPort,token,passport,"The City's procurement system. The token matches 10 of the 11 contracts; the platform licence itself is the exclusion that proves the rule and is listed below."
+passport,PASSPort,contract,CT1-002-20228801501,"Ivalua Inc — the $37.9M platform licence, and the LARGEST contract in the program. Its title is 'Inc Alias/DBA: Ivalua Inc Renewal #1' and contains no product name at all, so no title search can ever find it. Added on the co-termination evidence: it ends 04/27/2027 at OCS, the same day as Accenture's $24.0M maintenance contract for the same system."
+ng911,NG911,token,ng911,"Next Generation 911 — the City's overhaul of its emergency call system, run at DoITT. ⚠ It was invisible to the candidate extractor until 2026-08-29: the ID_LIKE regex read NG911 as a contract number and dropped it from every list, so a program of this size did not appear at all. Source: https://www.nyc.gov/content/oti/pages/"
+mycity,MyCity,token,mycity,"The City's unified services and benefits portal. Source: https://portal.311.nyc.gov/article/?kanumber=KA-03557"
+access-hra,ACCESS HRA,token,access hra,"HRA's benefits web and mobile platform. ⚠ Most of this program's money is a CEILING, not spend: the Accenture professional-services agreement is a master (MMA), so contractkind reports it separately and it must not be added to the committed figure. ⚠ A TWO-WORD name, unreachable until the bigram pass (#323) — no unigram extractor can form it, and `HRA` alone is correctly excluded as agency vocabulary. Source: https://www.nyc.gov/site/hra/help/accesshra.page"
+nyc3,NYC3,token,nyc3,"NYC Cyber Command, at DoITT — almost entirely staffing (threat analysts, IAM/MFA engineers, forensics) rather than software, so this is a program whose cost is people. ⚠ Nearly lost to a grade-code regex `^[A-Z]{1,4}[0-9]{1,2}$` that also matched NYC3; the regex was deleted rather than narrowed. Source: https://www.nyc.gov/content/oti/pages/"
+dob-now,DOB NOW,token,dob now,"Buildings' self-service filing system — Build, Safety, Inspections and Licensing. ⚠ Two-word, and BOTH halves are agency vocabulary — `NOW` only because the org register contains National Organization for Women — so it needed the bigram policy that tests halves for hard noise only. Source: https://www.nyc.gov/site/buildings/property-or-business-owner/dob-now.page"
+emscad,EMSCAD,token,emscad,"FDNY's EMS computer-aided dispatch system. This spelling alone misses the contracts written with a space; see the second token row."
+emscad,EMSCAD,token,ems cad,"⚠ THE SECOND SPELLING, and the reason this program needs two rows: a token here is a raw substring and does not normalise, so `emscad` cannot match `EMS CAD`. The candidate extractor DOES merge the two spellings, and before it did it reported this system's money as roughly two thirds of the truth — one name counted as two."
+herrc,HERRC,token,herrc,"Humanitarian Emergency Response and Relief Centers — the City's emergency shelter response. ⚠ Deliberately kept even though it spans FOUR agencies (DDC, HPD, DoITT, DYCD), which for most tokens would mean procurement vocabulary rather than a program: here it is the finding, because HERRC really is run across agencies — DDC built the sites, HPD and DYCD ran services, DoITT the technology. ⚠ Membership is unscoped, so these are not all technology contracts. Source: https://edc.nyc/humanitarian-emergency-response-and-relief-centers-rfp"
+idnyc,IDNYC,token,idnyc,"The municipal ID card program. Source: https://www.nyc.gov/site/idnyc/index.page"
+ocss,OCSS,token,ocss,"Office of Child Support Services systems. Source: https://data.cityofnewyork.us/Social-Services/NYC-Benefits-Platform-Benefits-and-Programs-Datase/kvhd-5fmu/about_data"
+fair-fares,Fair Fares,token,fair fares,"Half-price transit for low-income New Yorkers. ⚠ Two-word, so invisible before the bigram pass — the unigram extractor produced `Fair` and `Fares` as two unrelated candidates, neither of them a program. Source: https://www.nyc.gov/site/fairfares/index.page"

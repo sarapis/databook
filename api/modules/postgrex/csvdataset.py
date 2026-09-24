@@ -11,6 +11,23 @@ from config import Config
 from postgrex import PostgresModel
 
 
+
+# ⚠⚠ Table, column and index names here come from a CSV url and its header row,
+# i.e. from the caller. Each is quoted with an embedded `"` doubled, and the table
+# must be a plain name (the same rule as main._IMPORT_TABLE), so none can leave
+# its identifier (2026-09-24; tests/test_sql_injection.py).
+_TABLE_NAME = re.compile(r'^[a-z_][a-z0-9_-]*$')
+
+
+def _qi(name):
+    return '"{}"'.format(str(name).replace('"', '""'))
+
+
+def _checked_table(tbl):
+    if not tbl or len(tbl) > 63 or not _TABLE_NAME.match(tbl):
+        raise ValueError(f'invalid table name {tbl!r}')
+    return tbl
+
 class CsvDataset:
     db = None
     datadir = None
@@ -115,13 +132,14 @@ class CsvDataset:
         return True
 
     def create_tbl(self, tbl, model, idxs):
-        ff = ['"{}" {} DEFAULT {} NOT NULL'.format(f, pp['postgres'], 0 if pp['type'] == 'numeric' else "''") for f, pp in model.items()]
-        req = 'CREATE TABLE {} ({}, "_uid" serial)'.format(tbl, ', '.join(ff))
+        tbl = _checked_table(tbl)
+        ff = ['{} {} DEFAULT {} NOT NULL'.format(_qi(f), pp['postgres'], 0 if pp['type'] == 'numeric' else "''") for f, pp in model.items()]
+        req = 'CREATE TABLE {} ({}, "_uid" serial)'.format(_qi(tbl), ', '.join(ff))
         #print(req)
         self.db.q(req)
         if idxs:
             for idx in idxs.split(','):
-                self.db.q('CREATE INDEX "{}-{}" ON {} ("{}")'.format(tbl, idx, tbl, idx))
+                self.db.q('CREATE INDEX {} ON {} ({})'.format(_qi(f'{tbl}-{idx}'), _qi(tbl), _qi(idx)))
         
     def import_csv(self, tbl, fn, idxs):
         self.set_fn(fn)
@@ -129,15 +147,18 @@ class CsvDataset:
         model = self.model(fn)
         if not model:
             return None
-        ff = ', '.join(['"{}"'.format(f) for f in model])
+        tbl = _checked_table(tbl)
+        ff = ', '.join([_qi(f) for f in model])
         if tbl in self.db.tables():
             if self.match_model(tbl, model):
-                self.db.q('TRUNCATE {} RESTART IDENTITY'.format(tbl))
+                self.db.q('TRUNCATE {} RESTART IDENTITY'.format(_qi(tbl)))
             else:
-                self.db.q('DROP TABLE {}'.format(tbl))
+                self.db.q('DROP TABLE {}'.format(_qi(tbl)))
         if not tbl in self.db.tables():
             self.create_tbl(tbl, model, idxs)
-        req = "COPY {} ({}) FROM '{}' (FORMAT csv, HEADER, NULL 'null', DELIMITER ',')".format(tbl, ff, ('/var/tmp/' + fn) if Config.env == 'win' else self.fn)
+        path = ('/var/tmp/' + fn) if Config.env == 'win' else self.fn
+        req = "COPY {} ({}) FROM '{}' (FORMAT csv, HEADER, NULL 'null', DELIMITER ',')".format(
+            _qi(tbl), ff, path.replace("'", "''"))
         self.db.q(req)
         return req
     

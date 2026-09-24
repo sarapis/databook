@@ -32,7 +32,24 @@ SNAPSHOT = os.path.join(ROOT, 'app/resources/design-tokens/wegovnyc-core.snapsho
 
 # Names Databook declares that the package's reference tier does not carry. Pinned, so
 # that a value moving OUT of parity shows up as a change here rather than as silence.
-DATABOOK_ONLY = 32
+#
+# 32 -> 33 on 2026-09-01: `--db-brand-fg` was added. This guard fired on that and was
+# RIGHT to — its own message says the count must be deliberate rather than drift — so
+# the number is raised knowingly, not relaxed. Databook is the SOURCE of the reference
+# tier, so it may add a token first; the package simply does not carry it yet.
+# ⚠ The monthly token-parity workflow will therefore report `--db-brand-fg` as
+# Databook-only until sarapis/wegovnyc-design-tokens harvests it. That is expected,
+# and it is the direction the parity check is designed to tolerate (package-only names
+# still fail hard, because those are real divergence).
+# ⚠ WHY THE TOKEN EXISTS: the brand family shipped -bg and -wash with no -fg, so the
+# Analysis surface put the saturated identity colour on its own light tint at 2.02:1
+# against a 4.5:1 requirement. See the contrast guards in test_css_palette.py.
+#
+# 33 -> 34 on 2026-09-15: `--db-subsubmenu-h` was added for the Digital Services
+# Analysis third-level bar. Same reasoning as above -- Databook is the source tier
+# and may add first -- and it is a LAYOUT token, so it sits beside --db-header-h /
+# --db-submenu-h rather than in the palette. Raised knowingly.
+DATABOOK_ONLY = 34
 
 
 def _decls(path):
@@ -122,6 +139,17 @@ def test_databook_does_not_import_the_package():
     the parity check cannot quietly become a build dependency."""
     for rel in ('app/resources/views/layout.blade.php', 'app/public/css/databook-tokens.css'):
         body = open(os.path.join(ROOT, rel), encoding='utf-8').read()
+        # ⚠⚠ COMMENTS STRIPPED FIRST, because an IMPORT is code and a mention is
+        # prose. This fired on a `/* … */` note in `databook-tokens.css`
+        # EXPLAINING why a shared reference value must not be edited here — the
+        # thirteenth time a scanner in this repo has reported its own
+        # explanation as the defect. A guard that reads prose as code reports
+        # problems that are not there, which is the zero-files scanner wearing
+        # the other hat: it fails where nothing is wrong instead of passing
+        # where something is.
+        # Both files are CSS or Blade, so both comment forms are removed.
+        body = re.sub(r'/\*.*?\*/', '', body, flags=re.S)
+        body = re.sub(r'\{\{--.*?--\}\}', '', body, flags=re.S)
         assert 'wegovnyc-design-tokens' not in body and 'variant-' not in body, (
             f"{rel} now references the package. If adopting it is the intent, that is a "
             f"deliberate change with a deploy story — not something this parity check "

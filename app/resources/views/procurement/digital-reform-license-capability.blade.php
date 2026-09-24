@@ -51,9 +51,19 @@
 <div class="inner_container">
     <div class="container" style="padding-top: var(--db-space-3); padding-bottom: var(--db-space-5);">
 
-        <a href="{{ route('research.digital-reform.licenses') }}" class="db-btn db-btn-ghost db-btn-sm mb-2"><i class="bi bi-arrow-left"></i> Software Licenses</a>
-        <div class="db-eyebrow">Procurement &middot; Digital Services <span class="db-analysis-badge"><i class="bi bi-stars"></i> Analysis</span></div>
+        <a href="{{ route('research.digital-reform.products') }}" class="db-btn db-btn-ghost db-btn-sm mb-2"><i class="bi bi-arrow-left"></i> Software Licenses</a>
         <h1>{{ $label }}</h1>
+        {{-- ⚠ THE ANALYSIS IDENTITY, RESTORED. The header simplification on the
+             storyboard branch dropped the `db-analysis-badge` eyebrow from all
+             seven Digital Services pages. On the five index pages that is fine
+             — each already includes this banner AND says "Analysis" in its own
+             `<h1>`. This page and the capability page had NEITHER, so they were
+             left as public, indexable, AI-derived pages carrying no marking at
+             all, against a comment at the top of this very file saying "Do not
+             remove them".
+             ⭐ The banner is the STRONGER marker the badge was standing in for:
+             a sentence naming the interpretation layer, not a one-word chip. --}}
+        @include('sub.analysis-banner')
 
         @if($capKey === 'other')
             <div class="lic-note">
@@ -102,7 +112,7 @@
             <div class="px-3 pt-3">
                 <h2 class="lic-h2"><i class="bi bi-box-seam"></i> The products</h2>
             </div>
-            <table class="db-table">
+            <table class="db-table db-dt">
                 <thead>
                     <tr><th>Product</th><th class="lic-num">Contracts</th><th class="lic-num">Agencies</th><th class="lic-num">Value</th><th>Purchase type</th></tr>
                 </thead>
@@ -111,7 +121,7 @@
                     <tr>
                         <td>
                             @if(!empty($p['slug']))
-                                <a href="{{ route('research.digital-reform.license-family', ['slug' => $p['slug']]) }}"><strong>{{ $p['key'] }}</strong></a>
+                                <a href="{{ route('research.digital-reform.product-family', ['slug' => $p['slug']]) }}"><strong>{{ $p['key'] }}</strong></a>
                             @else
                                 <strong>{{ $p['key'] }}</strong>
                             @endif
@@ -133,7 +143,7 @@
             <div class="px-3 pt-3">
                 <h2 class="lic-h2"><i class="bi bi-building"></i> Agencies buying it</h2>
             </div>
-            <table class="db-table">
+            <table class="db-table db-dt">
                 <thead><tr><th>Agency</th><th class="lic-num">Contracts</th><th class="lic-num">Products</th><th class="lic-num">Value</th></tr></thead>
                 <tbody>
                 @foreach($agencies as $a)

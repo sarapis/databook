@@ -99,6 +99,20 @@ _orgcore_spec.loader.exec_module(_orgcore)
 sys.modules.setdefault("modules.orgcore", _orgcore)
 _mock_autoload.orgcore = _orgcore
 
+# modules.sourcedupes is NOT mocked either: pure stdlib (a dict and two string
+# builders) and its real return value IS the SQL. It decides whether a query
+# reads `schoollocations` raw — which the City publishes with 59 duplicate rows,
+# doubling every joined figure — or through `SELECT DISTINCT *`. A MagicMock
+# would interpolate its repr into the FROM clause, which is both invalid SQL and
+# indistinguishable, to a test, from the un-deduped table it exists to replace.
+_sourcedupes_spec = _ilu.spec_from_file_location(
+    "modules.sourcedupes", os.path.join(_api_dir, "modules", "sourcedupes.py")
+)
+_sourcedupes = _ilu.module_from_spec(_sourcedupes_spec)
+_sourcedupes_spec.loader.exec_module(_sourcedupes)
+sys.modules.setdefault("modules.sourcedupes", _sourcedupes)
+_mock_autoload.sourcedupes = _sourcedupes
+
 # modules.errfmt is NOT mocked either: pure stdlib and its real behaviour is
 # exactly what is under test. It exists because `print(f"...error: {e}")` logged
 # an EMPTY message for every timeout (str(TimeoutError()) == ''), so a MagicMock —

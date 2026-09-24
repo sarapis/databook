@@ -100,6 +100,10 @@ COLUMNS = """
     agency      text,
     notice_type text,
     start_date  date,
+    vendor      text,
+    amount      numeric,
+    pin         text,
+    ctr_id      text,
     built_at    timestamptz NOT NULL DEFAULT now()
 """
 
@@ -173,16 +177,45 @@ async def build(conn, families, apply: bool):
     # ⚠ The tsvector expression must be textually what searchindexes.py declares,
     # or the planner cannot use idx_crol_body_fts and this becomes 774 sequential
     # scans of a 464 MB heap.
+    # ⚠ `vendor`/`amount` are the notice's OWN award fields, carried through so the
+    # panel can show WHO was paid and HOW MUCH — the one place the City states a
+    # price against a named product. They are sparse on purpose: only award-type
+    # notices carry them (measured: 531 of 3,782 links), and vendor and amount
+    # travel together.
+    #
+    # ⚠⚠ `ContractAmount` IS TEXT AND MOSTLY BLANK — 3,233 of 3,782 are the empty
+    # string, not NULL, so `count()` on it reads as 100% populated and is
+    # meaningless. Cast only what is actually numeric, and treat 0 as absent (17
+    # rows), because a rendered "$0.00" is a claim we cannot support.
+    #
+    # ⚠⚠ THE CONTRACT LOOKUP IS A LATERAL WITH LIMIT 1, NOT A JOIN. `contracts`
+    # holds ONE ROW PER AMENDMENT, so `JOIN contracts ON epin = trim(PIN)` would
+    # DUPLICATE the notice once per amendment — the #262/#278 defect, which has
+    # now shipped twice in this repo. The lateral cannot multiply rows.
+    # `idx_contracts_epin` (#199) is what makes it cheap.
     await conn.execute(
-        """
+        r"""
         INSERT INTO _staging_notice_product_links
-              (family, request_id, title, agency, notice_type, start_date)
+              (family, request_id, title, agency, notice_type, start_date,
+               vendor, amount, pin, ctr_id)
         SELECT f.family, c."RequestID", c."ShortTitle", c."AgencyName",
-               c."TypeOfNoticeDescription", c.start_date_parsed
+               c."TypeOfNoticeDescription", c.start_date_parsed,
+               NULLIF(btrim(coalesce(c."VendorName", '')), ''),
+               CASE WHEN c."ContractAmount"::text ~ '^[0-9]+(\.[0-9]+)?$'
+                     AND c."ContractAmount"::text::numeric > 0
+                    THEN c."ContractAmount"::text::numeric END,
+               NULLIF(btrim(coalesce(c."PIN", '')), ''),
+               k.ctr_id
         FROM unnest($1::text[]) AS f(family)
         JOIN crol c
           ON to_tsvector('simple', coalesce(c."AdditionalDescription1", ''))
              @@ phraseto_tsquery('simple', f.family)
+        LEFT JOIN LATERAL (
+            SELECT ctr_id FROM contracts
+             WHERE epin = btrim(coalesce(c."PIN", ''))
+             ORDER BY current_amount DESC NULLS LAST
+             LIMIT 1
+        ) k ON true
         ON CONFLICT DO NOTHING
         """,
         families,

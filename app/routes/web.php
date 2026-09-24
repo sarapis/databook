@@ -10,7 +10,10 @@ use App\Http\Controllers\Notices;
 use App\Http\Controllers\Auctions;
 use App\Http\Controllers\People;
 use App\Http\Controllers\ProcurementController;
+use App\Http\Controllers\BudgetRevenueController;
+use App\Http\Controllers\NychaController;
 use App\Custom\DatabookAPI;
+use App\Custom\DistDatasets;
 
 // Local API proxy for bypassing CORS in development
 Route::get('/api/{path}', function ($path) {
@@ -62,6 +65,33 @@ Route::post('/admin/orgs/{id}/retire', [\App\Http\Controllers\OrgAdmin::class, '
     ->where('id', '[0-9]+')->name('admin.orgs.retire');
 Route::post('/admin/orgs/{id}/unretire', [\App\Http\Controllers\OrgAdmin::class, 'unretire'])
     ->where('id', '[0-9]+')->name('admin.orgs.unretire');
+
+// The curation review app — Phase 1 of docs/REVIEW-APP-SCOPE.md.
+//
+// ⚠ Gated by nginx basic auth on /review/, exactly as /admin/ is: these pages
+// show UNREVIEWED model output naming City programs and assigning them money,
+// and #146's rule is that such rows never render publicly. The origin gate is
+// what makes serving them safe; api/tests/test_review_ui.py pins the block.
+//
+// ⚠ The item route is declared with a constrained {item} rather than a bare
+// wildcard so a future /review/{queue}/export cannot arrive as an item id —
+// the same trap /admin/orgs/vocabulary already documents above.
+Route::get('/review', [\App\Http\Controllers\Review::class, 'index'])->name('review');
+// ⚠ Declared BEFORE the {queue} route or /review/glossary arrives as a queue
+// name — the same trap /admin/orgs/vocabulary already documents.
+Route::get('/review/glossary', [\App\Http\Controllers\Review::class, 'glossary'])->name('review.glossary');
+Route::get('/review/{queue}', [\App\Http\Controllers\Review::class, 'queue'])
+	->where('queue', '[a-z0-9\-]+')->name('review.queue');
+Route::get('/review/{queue}/{item}', [\App\Http\Controllers\Review::class, 'item'])
+	->where(['queue' => '[a-z0-9\-]+', 'item' => '[^/]+'])->name('review.item');
+Route::post('/review/{queue}/{item}', [\App\Http\Controllers\Review::class, 'decide'])
+	->where(['queue' => '[a-z0-9\-]+', 'item' => '[^/]+'])->name('review.decide');
+Route::post('/review/{queue}/{item}/links', [\App\Http\Controllers\Review::class, 'addLink'])
+	->where(['queue' => '[a-z0-9\-]+', 'item' => '[^/]+'])->name('review.link');
+Route::post('/review/{queue}/{item}/links/{link}/delete', [\App\Http\Controllers\Review::class, 'deleteLink'])
+	->where(['queue' => '[a-z0-9\-]+', 'item' => '[^/]+', 'link' => '[0-9]+'])->name('review.unlink');
+Route::post('/review/{queue}/{item}/links/{link}/source', [\App\Http\Controllers\Review::class, 'flagLink'])
+	->where(['queue' => '[a-z0-9\-]+', 'item' => '[^/]+', 'link' => '[0-9]+'])->name('review.linksource');
 
 Route::get('/styleguide', function () {
     return view('styleguide', ['pagetitle' => 'Styleguide - Databook.nyc']);
@@ -119,10 +149,35 @@ Route::get('/orgChartsXHR/{id}/{section}', [Organizations::class, 'orgChartsXHR'
 
 Route::get('/districts', [Districts::class, 'main'])->name('districts');
 Route::get('/districts/{type}', [Districts::class, 'main'])->where('type', '^(cd|cc|nta|sd)$')->name('districtsPresetType');
+// Landing section comes from DistDatasets, never a literal here: 'projects'
+// does not exist for sd, so hardcoding it 404'd every school-district URL that
+// named no section. See DistDatasets::defaultSection().
+// ⚠⚠ THE ID/SLUG SEPARATOR IS `_`, NOT `-`, AND THAT IS NOT COSMETIC.
+// `{id}` compiles to a LAZY match, so on `/d/nta-Tribeca-Civic Center-district`
+// it stopped at the first hyphen and the controller received `Tribeca`. **103 of
+// the 255 NTA names carry a hyphen** — Tribeca-Civic Center,
+// Downtown Brooklyn-DUMBO-Boerum Hill — so 40% of neighbourhood districts
+// resolved to a name that does not exist and rendered an empty page.
+// ⚠ This is the same fix `/p/{prjId}_{prjslug}` already uses, for the same
+// reason: project ids contain hyphens too (`HED-545`). An underscore cannot
+// appear in an NTA name or a slug, so the split is unambiguous by construction
+// rather than by luck about the data.
+// ⚠ Every link is generated through `route('districtsPreset', …)`, so they all
+// move together; the legacy hyphen routes below keep old links working.
+Route::get('/d/{type}-{id}_{dslug}', function ($type, $id, $dslug) {
+    return redirect(route('districtsPreset', ['type' => $type, 'id' => $id, 'dslug' => $dslug, 'section' => (new DistDatasets())->defaultSection($type)]));
+})->where('type', '^(cd|cc|nta|sd)$')->name('district');
+Route::get('/d/{type}-{id}_{dslug}/{section}', [Districts::class, 'main'])->where('type', '^(cd|cc|nta|sd)$')->name('districtsPreset');
+
+// ⚠ LEGACY hyphen shape, kept so existing links and bookmarks still resolve.
+// Constrained to NUMERIC ids: cd/cc/sd are numbers and were never ambiguous,
+// while an nta name is exactly the case the lazy match got wrong. Leaving nta on
+// this pattern would keep silently truncating it.
 Route::get('/d/{type}-{id}-{dslug}', function ($type, $id, $dslug) {
-    return redirect(route('districtsPreset', ['type' => $type, 'id' => $id, 'dslug' => $dslug, 'section' => 'projects']));
-})->where('type', '^(cd|cc|nta|sd)$');
-Route::get('/d/{type}-{id}-{dslug}/{section}', [Districts::class, 'main'])->where('type', '^(cd|cc|nta|sd)$')->name('districtsPreset');
+    return redirect(route('district', ['type' => $type, 'id' => $id, 'dslug' => $dslug]));
+})->where(['type' => '^(cd|cc|nta|sd)$', 'id' => '[0-9]+'])->name('districtLegacy');
+Route::get('/d/{type}-{id}-{dslug}/{section}', [Districts::class, 'main'])
+    ->where(['type' => '^(cd|cc|nta|sd)$', 'id' => '[0-9]+'])->name('districtsPresetLegacy');
 Route::get('/districtXHR/{type}/{id}/projects', [Districts::class, 'projectSectionXHR'])->name('distProjectSection');
 Route::get('/districtXHR/{type}/{id}/{section}', [Districts::class, 'sectionXHR'])->name('distSection');
 
@@ -149,12 +204,25 @@ Route::get('/capital/minor-projects/{maprojid}', [Projects::class, 'mProject'])-
 
 
 Route::get('/projects', [Projects::class, 'projects'])->name('projects');
-Route::get('/projects/capital', [Projects::class, 'main'])->name('capital');
+// ⚠ Renamed /projects/capital -> /projects/about (owner request). The ROUTE
+// NAME stays `capital` deliberately: eleven call sites and several guards
+// resolve it by name, and churning the name would touch all of them to no
+// visible end. The old URL 302s so existing links and bookmarks still land —
+// the same convention the Digital Services reorg used.
+Route::get('/projects/about', [Projects::class, 'main'])->name('capital');
+Route::get('/projects/capital', function () {
+    return redirect()->route('capital', request()->query(), 302);
+});
 Route::get('/projects/types', [Projects::class, 'prjTypes_a'])->name('prjTypes');
 Route::get('/projects/types/{tslug}', [Projects::class, 'prjType_a'])->name('prjType');
 Route::get('/projects/categories', [Projects::class, 'categories_a'])->name('prjCategories');
 Route::get('/projects/categories/{cslug?}', [Projects::class, 'category_a'])->name('prjStratCategory');
 Route::get('/projects/budget-lines', [Projects::class, 'budgetLines_a'])->name('budgetLines');
+// ⚠⚠ DECLARED BEFORE `{blcode}`, and the order is load-bearing — the same trap
+// the digital-services section already pins: a specific path declared AFTER a
+// single-segment wildcard is swallowed by it. `/projects/budget-lines/families`
+// would arrive as `blcode = "families"`.
+Route::get('/projects/budget-lines/families/{fslug}', [Projects::class, 'budgetLineFamily_a'])->name('budgetLineFamily');
 Route::get('/projects/budget-lines/{blcode}', [Projects::class, 'budgetLine_a'])->name('budgetLine');
 Route::get('/projects/commitments', [Projects::class, 'commitments_a'])->name('prjCommitments');
 
@@ -274,17 +342,51 @@ Route::get('/people/{id}-{slug}', [People::class, 'person'])->name('peoplePerson
 
 
 # Procurement
-Route::get('/procurement', 'ProcurementController@index')->name('procurement.index');
-Route::get('/procurement/vendors', 'ProcurementController@vendors')->name('procurement.vendors');
-Route::get('/procurement/vendor/{id}', 'ProcurementController@vendorProfile')->name('procurement.vendor');
-Route::get('/procurement/agencies', 'ProcurementController@agencies')->name('procurement.agencies');
-Route::get('/procurement/contracts', 'ProcurementController@contracts')->name('procurement.contracts');
-Route::get('/procurement/contract/{id}', 'ProcurementController@contractProfile')->name('procurement.contract');
-Route::get('/procurement/solicitations', 'ProcurementController@solicitations')->name('procurement.solicitations');
-Route::get('/procurement/solicitation/{epin}', 'ProcurementController@solicitationProfile')->name('procurement.solicitation');
-Route::get('/procurement/agency/{name}', 'ProcurementController@orgProcurement')->where('name', '.*')->name('agency.procurement');
-Route::get('/research/digital-reform', 'ProcurementController@digitalReform')->name('research.digital-reform');
-Route::get('/research/digital-reform/expiring', 'ProcurementController@digitalReformExpiring')->name('research.digital-reform.expiring');
+Route::get('/procurement', [ProcurementController::class, 'index'])->name('procurement.index');
+Route::get('/procurement/vendors', [ProcurementController::class, 'vendors'])->name('procurement.vendors');
+Route::get('/procurement/vendor/{id}', [ProcurementController::class, 'vendorProfile'])->name('procurement.vendor');
+Route::get('/procurement/agencies', [ProcurementController::class, 'agencies'])->name('procurement.agencies');
+Route::get('/procurement/contracts', [ProcurementController::class, 'contracts'])->name('procurement.contracts');
+Route::get('/procurement/contract/{id}', [ProcurementController::class, 'contractProfile'])->name('procurement.contract');
+Route::get('/procurement/solicitations', [ProcurementController::class, 'solicitations'])->name('procurement.solicitations');
+Route::get('/procurement/solicitation/{epin}', [ProcurementController::class, 'solicitationProfile'])->name('procurement.solicitation');
+Route::get('/procurement/agency/{name}', [ProcurementController::class, 'orgProcurement'])->where('name', '.*')->name('agency.procurement');
+Route::get('/research/digital-reform', [ProcurementController::class, 'digitalReform'])->name('research.digital-reform');
+// REORGANIZED 2026-08-21 (docs/DIGITAL-REFORM-REORG-PLAN.md): the section is a
+// five-page submenu -- Overview / Contracts / Products / Master Agreements /
+// Vendors. /expiring and /licenses* became /contracts and /products*; the old
+// paths 302 below, WITH their query strings, because family pages are linked
+// from every vendor profile and the queue's filter URLs are shared in email.
+Route::get('/research/digital-reform/search', [ProcurementController::class, 'digitalReformSearch'])->name('research.digital-reform.search');
+Route::get('/research/digital-reform/contracts', [ProcurementController::class, 'digitalReformExpiring'])->name('research.digital-reform.contracts');
+// The Renewal Review Queue's own page (2026-09-23), split out of Contracts: a
+// working tool for reviewers, with its CSV export beside it. A Contracts URL
+// carrying a queue parameter 302s here (see digitalReformExpiring).
+Route::get('/research/digital-reform/contracts/review', [ProcurementController::class, 'digitalReformReview'])->name('research.digital-reform.review');
+Route::get('/research/digital-reform/contracts/review/export', [ProcurementController::class, 'digitalReformReviewExport'])->name('research.digital-reform.review.export');
+Route::get('/research/digital-reform/agreements', [ProcurementController::class, 'digitalReformMasterAgreements'])->name('research.digital-reform.agreements');
+Route::get('/research/digital-reform/vendors', [ProcurementController::class, 'digitalReformVendors'])->name('research.digital-reform.vendors');
+// The data lens (docs/DIGITAL-SERVICES-SECTION-PLAN.md §5c Phase A). Reads
+// /oce/licenses/data, which derives entirely from layers the Products page
+// already publishes -- so this page adds a QUESTION, never a second set of
+// figures. ⚠ Declared before /products/{slug}, which is constrained to
+// [A-Za-z0-9-]+ and would otherwise be the only candidate for a future
+// /products/data; keeping it a sibling of /products rather than a child avoids
+// the collision entirely.
+Route::get('/research/digital-reform/data', [ProcurementController::class, 'digitalReformData'])->name('research.digital-reform.data');
+Route::get('/research/digital-reform/call-centers', [ProcurementController::class, 'digitalReformCallCenters'])->name('research.digital-reform.call-centers');
+// Renamed 2026-09-16 (owner): "Master Agreements" -> "Agreements" in the
+// submenu and on the page, and the URL moved with the label rather than being
+// left to disagree with it. Same treatment as /expiring -> /contracts and
+// /licenses* -> /products* above: a 302 carrying the query string, because the
+// old path is linked from the storyboard, the Products page and the queue.
+Route::get('/research/digital-reform/master-agreements', function () {
+    return redirect()->route('research.digital-reform.agreements', request()->query());
+});
+// /expiring WAS the queue, so it goes straight to the queue's own page.
+Route::get('/research/digital-reform/expiring', function () {
+    return redirect()->route('research.digital-reform.review', request()->query());
+});
 // PUBLISHED 2026-08-11. Was UNLISTED (absent from the nav + noindex) from
 // 2026-08-10 while every licence judgement on it was unreviewed AI output. The
 // top 20 families -- 88.0% of the $1,370.4M -- have now been reviewed and
@@ -297,27 +399,44 @@ Route::get('/research/digital-reform/expiring', 'ProcurementController@digitalRe
 // pattern), not absence from the nav.
 // ⚠ The ~410-family tail below the top 20 is still auto-classified. What makes
 // publishing defensible is that the page says so; guard tests pin those caveats.
-Route::get('/research/digital-reform/licenses', 'ProcurementController@digitalReformLicenses')->name('research.digital-reform.licenses');
+Route::get('/research/digital-reform/products', [ProcurementController::class, 'digitalReformLicenses'])->name('research.digital-reform.products');
+Route::get('/research/digital-reform/licenses', function () {
+    return redirect()->route('research.digital-reform.products', request()->query());
+});
 // Per-family profile at a stable URL. The slug is assigned at build time in
 // license_family, so it survives rebuilds; constrained here so it cannot
 // swallow a future sibling route.
 // ⚠ Declared BEFORE the {slug} family route, or "function/network-security" is
 // swallowed by it. Laravel matches in declaration order.
-Route::get('/research/digital-reform/licenses/function/{cap}', 'ProcurementController@digitalReformLicenseCapability')
-    ->where('cap', '[a-z0-9-]+')->name('research.digital-reform.license-capability');
-Route::get('/research/digital-reform/licenses/{slug}', 'ProcurementController@digitalReformLicenseFamily')
-    ->where('slug', '[A-Za-z0-9-]+')->name('research.digital-reform.license-family');
-Route::get('/procurement/transactions', 'ProcurementController@transactions')->name('procurement.transactions');
-Route::get('/procurement/transactions/search', 'ProcurementController@transactionsSearch')->name('procurement.transactions.search');
-Route::get('/procurement/budget', 'BudgetRevenueController@budget')->name('procurement.budget');
-Route::get('/procurement/revenue', 'BudgetRevenueController@revenue')->name('procurement.revenue');
-Route::get('/procurement/payroll', 'BudgetRevenueController@payroll')->name('procurement.payroll');
-Route::get('/procurement/nycha', 'NychaController@index')->name('procurement.nycha');
-Route::get('/procurement/nycha/budget', 'NychaController@budget')->name('procurement.nycha.budget');
-Route::get('/procurement/nycha/revenue', 'NychaController@revenue')->name('procurement.nycha.revenue');
-Route::get('/procurement/nycha/contracts', 'NychaController@contracts')->name('procurement.nycha.contracts');
-Route::get('/procurement/nycha/spending', 'NychaController@spending')->name('procurement.nycha.spending');
-Route::get('/procurement/data-sources', 'ProcurementController@dataSources')->name('procurement.datasources');
+// ⚠ Declared BEFORE the {slug} family route too, or "open-source" arrives as a
+// family slug and 404s.
+Route::get('/research/digital-reform/products/open-source', [ProcurementController::class, 'digitalReformOpenSource'])->name('research.digital-reform.open-source');
+Route::get('/research/digital-reform/products/function/{cap}', [ProcurementController::class, 'digitalReformLicenseCapability'])
+    ->where('cap', '[a-z0-9-]+')->name('research.digital-reform.product-capability');
+Route::get('/research/digital-reform/products/{slug}', [ProcurementController::class, 'digitalReformLicenseFamily'])
+    ->where('slug', '[A-Za-z0-9-]+')->name('research.digital-reform.product-family');
+// Old /licenses/* deep links 302 to their /products/* twins, slug intact.
+// ⚠ function/{cap} declared before {slug} here too, or the redirect for
+// "licenses/function/x" is swallowed by the slug redirect.
+Route::get('/research/digital-reform/licenses/function/{cap}', function ($cap) {
+    return redirect()->route('research.digital-reform.product-capability',
+        array_merge(['cap' => $cap], request()->query()));
+})->where('cap', '[a-z0-9-]+');
+Route::get('/research/digital-reform/licenses/{slug}', function ($slug) {
+    return redirect()->route('research.digital-reform.product-family',
+        array_merge(['slug' => $slug], request()->query()));
+})->where('slug', '[A-Za-z0-9-]+');
+Route::get('/procurement/transactions', [ProcurementController::class, 'transactions'])->name('procurement.transactions');
+Route::get('/procurement/transactions/search', [ProcurementController::class, 'transactionsSearch'])->name('procurement.transactions.search');
+Route::get('/procurement/budget', [BudgetRevenueController::class, 'budget'])->name('procurement.budget');
+Route::get('/procurement/revenue', [BudgetRevenueController::class, 'revenue'])->name('procurement.revenue');
+Route::get('/procurement/payroll', [BudgetRevenueController::class, 'payroll'])->name('procurement.payroll');
+Route::get('/procurement/nycha', [NychaController::class, 'index'])->name('procurement.nycha');
+Route::get('/procurement/nycha/budget', [NychaController::class, 'budget'])->name('procurement.nycha.budget');
+Route::get('/procurement/nycha/revenue', [NychaController::class, 'revenue'])->name('procurement.nycha.revenue');
+Route::get('/procurement/nycha/contracts', [NychaController::class, 'contracts'])->name('procurement.nycha.contracts');
+Route::get('/procurement/nycha/spending', [NychaController::class, 'spending'])->name('procurement.nycha.spending');
+Route::get('/procurement/data-sources', [ProcurementController::class, 'dataSources'])->name('procurement.datasources');
 
 # Legacy OCE blog redirects
 Route::get('/blog/the-missing-pieces-bridging-nyc-procurement-data-with-ocds', fn() =>

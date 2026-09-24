@@ -7,8 +7,13 @@ all 56,806 contracts on 2026-08-18:
     1,751 — and EVERY oversized group lands on 06/30, the NYC fiscal-year
     boundary, where a shared end date carries no information at all.
 Dropping either rule re-admits a "4,721 related contracts" block. With both, 3,488
-groups / 12,007 contracts survive — and MOCS's PASSPort, at 5 contracts and
-$78.1M all ending 04/27/2027, is among them.
+groups / 12,007 contracts survive — and MOCS's PASSPort, at 2 contracts and
+$61.9M all ending 04/27/2027, is among them.
+
+⚠ This docstring said "5 contracts and $78.1M" until 2026-08-19. That figure was
+the amendment double-count this file's grain guards now exist to prevent (#278):
+those five ROWS are two contracts. Corrected here as well as in the code, because
+a stale figure in a test reads exactly like a measured one.
 """
 import io
 import os
@@ -106,3 +111,117 @@ def test_the_endpoint_serves_the_key():
     src = _read(OCE)
     assert '"related_contracts": await _related_contracts(' in src, \
         "the contract endpoint no longer serves related_contracts"
+
+
+# ---------------------------------------------------------------------------
+# GRAIN. Added after the block shipped publishing figures that did not exist.
+#
+# ⚠⚠ `contracts` HOLDS ONE ROW PER AMENDMENT — 55,806 rows for 36,421 distinct
+# contract_ids — and every amendment carries its OWN ctr_id. The first draft
+# deduped with `DISTINCT ON (ctr_id)`, which therefore collapsed nothing, and
+# measured on prod it failed in BOTH directions:
+#   * standing on Ivalua's PASSPort contract, `same_vendor` listed FIVE rows,
+#     every one an amendment of the contract being read — $33.67M of "other
+#     contracts" that do not exist, under a heading calling the list a FACT.
+#     901 (vendor, agency) groups hold ONE real contract behind >1 row, so 3,551
+#     contract pages rendered a wholly phantom block;
+#   * the size cap counted ROWS, so 149 genuine groups were dropped as "too big"
+#     and 2,762 pages silently lost the block.
+# The six guards above all passed throughout: they pin the noise rules and the
+# controller seam, and NONE of them looked at the grain.
+# ---------------------------------------------------------------------------
+
+def _run_related(peers=None, same_vendor_rows=None, contract_id='CT1-002-20228801501',
+                 ctr_id='4509900'):
+    """Run the REAL `_related_contracts`, capturing the SQL it emits.
+
+    ⚠ The dedup happens in Postgres, so a fake cannot execute it — which is why
+    the grain is asserted against the EMITTED SQL and only the self-exclusion is
+    asserted behaviourally. Same split as the partial-index guard.
+    """
+    import asyncio
+    from routers import oce
+
+    captured = []
+
+    async def _fake_select_safe(sql, params=None):
+        captured.append(sql)
+        if 'vendor_name = $1' in sql:
+            return list(same_vendor_rows or [])
+        return list(peers or [])
+
+    real = oce.PostgresModelAsync.select_safe
+    oce.PostgresModelAsync.select_safe = _fake_select_safe
+    try:
+        out = asyncio.run(oce._related_contracts(
+            ctr_id, contract_id, 'Ivalua Inc', 'OFFICE OF CONTRACT SERVICES',
+            '04/27/2027'))
+    finally:
+        oce.PostgresModelAsync.select_safe = real
+    return out, captured
+
+
+def test_both_lists_dedupe_at_contract_grain_not_ctr_id():
+    """⚠ ASSERTS THE EMITTED SQL, because the grain is decided by Postgres.
+
+    `DISTINCT ON (ctr_id)` is a no-op against amendments — each has its own
+    ctr_id — so it must not be what either query keys on. The key is #262's
+    `coalesce(contract_id, ctid)`: keying on contract_id ALONE would collapse
+    every NULL-id row into one, and 2,546 rows carry no contract_id.
+    """
+    _, captured = _run_related()
+    assert len(captured) == 2, f'expected both queries to run, got {len(captured)}'
+    for sql in captured:
+        assert "DISTINCT ON (coalesce(contract_id, 'row:' || ctid::text))" in sql, (
+            'a related-contracts query is not deduping at contract grain: ' + sql)
+        assert 'DISTINCT ON (ctr_id)' not in sql, (
+            'ctr_id cannot dedupe amendments — each amendment has its own: ' + sql)
+        # the ORDER BY must lead with the same expression or Postgres rejects it,
+        # and picking the largest amendment is what makes the survivor the
+        # contract's own restated total (#262).
+        assert "ORDER BY coalesce(contract_id, 'row:' || ctid::text), current_amount DESC" in sql
+
+
+def test_a_contract_is_never_listed_as_related_to_itself():
+    """⚠⚠ THE BUG THIS FILE EXISTS FOR, and it is NOT fixed by excluding ctr_id.
+
+    A contract's own amendments share its contract_id and carry DIFFERENT
+    ctr_ids, so an exclusion keyed on ctr_id leaves them in the list — which is
+    how Ivalua's contract came to be listed among the contracts co-terminating
+    with it, and how its five amendments became five 'other contracts this
+    vendor holds'.
+    """
+    own_amendment = {'ctr_id': '5595171', 'contract_id': 'CT1-002-20228801501',
+                     'vendor_name': 'Ivalua Inc', 'current_amount': 6_500_000.0}
+    other = {'ctr_id': '5068301', 'contract_id': 'CT1-002-20248805109',
+             'vendor_name': 'ACCENTURE LLP', 'current_amount': 24_010_000.0}
+    self_row = {'ctr_id': '4509900', 'contract_id': 'CT1-002-20228801501',
+                'vendor_name': 'Ivalua Inc', 'current_amount': 37_910_000.0}
+
+    out, _ = _run_related(peers=[self_row, own_amendment, other],
+                          same_vendor_rows=[own_amendment])
+
+    coterm_ids = {r['contract_id'] for r in out['co_terminating']}
+    assert coterm_ids == {'CT1-002-20248805109'}, (
+        'the contract being read (or its amendments) leaked into '
+        f'co_terminating: {coterm_ids}')
+    assert out['same_vendor'] == [], (
+        "an amendment of the contract being read is not another contract the "
+        f"vendor holds: {out['same_vendor']}")
+
+
+def test_the_size_cap_is_applied_to_the_deduped_list():
+    """⚠ The cap counts CONTRACTS. Counting rows dropped 149 real groups whose
+    only sin was having amendments, and 2,762 pages lost the block silently — a
+    false negative is invisible in a way an inflated list is not."""
+    from routers.oce import _COTERM_MAX_GROUP
+
+    def _peer(i):
+        return {'ctr_id': f'900{i}', 'contract_id': f'CT-{i}',
+                'vendor_name': f'V{i}', 'current_amount': 1.0}
+
+    at_cap, _ = _run_related(peers=[_peer(i) for i in range(_COTERM_MAX_GROUP)])
+    assert at_cap['co_terminating'], 'a group exactly at the cap must still render'
+
+    over, _ = _run_related(peers=[_peer(i) for i in range(_COTERM_MAX_GROUP + 1)])
+    assert over['co_terminating'] == [], 'a group over the cap must be dropped'

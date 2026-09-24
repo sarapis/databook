@@ -62,6 +62,18 @@ INVENTORY = {
     "[contracts] precomputed spend map unavailable: {}":
         ("warning", "falls back to the live background DuckDB scan; the page is "
                     "slower, not wrong, and an absent table is the pre-build state"),
+    # ⚠ The call-center lens's membership seed. A WARNING because the endpoint
+    # returns `available: false` and the PAGE says the lens is unavailable —
+    # nothing else in the section reads this seed, and the failure removes one
+    # page rather than corrupting a figure. ⚠⚠ The alternative would be far
+    # worse: degrading to a text pattern would repopulate the lens with the
+    # over-matches that made this a curated list in the first place (a
+    # geotechnical contract number, a shelter's street address, crisis
+    # shelters), and a half-wrong lens reads exactly like a right one.
+    "[oce] call-center seed unreadable: %s":
+        ("warning", "the call-center lens reports itself unavailable and the "
+                    "page says so; no other surface reads this seed, and the "
+                    "only worse option is silently falling back to a pattern"),
     "[contract {}] related-contracts lookup failed: {}":
         ("warning", "the Related contracts block disappears from ONE contract "
                     "page; every other section still renders, and the block is "
@@ -69,6 +81,16 @@ INVENTORY = {
     "[contract] precomputed detail unavailable: {}":
         ("warning", "falls back to _query_contract_detail for that one contract; "
                     "identical output, just scanned instead of read"),
+    # ⚠ WARNING for the SAME reason as the related-contracts line above, plus a
+    # stronger one: an absent `contract_program` is the legitimate state before
+    # build_program_groups.py has ever run, and only 11 contracts are in any
+    # program today, so ERROR would alert on a correct fresh environment on
+    # every request. The panel is additive — no figure elsewhere on the page
+    # depends on it, and its disappearance cannot make another number wrong.
+    "[contract {}] program lookup failed: {}":
+        ("warning", "the program panel disappears from ONE contract page; an "
+                    "absent contract_program table is the pre-build state, and "
+                    "no other figure on the page is derived from it"),
     # ---- ERROR: a whole section or a queue-wide signal, gone for everyone ----
     "[oce] notices-for-epins query failed: {}":
         ("error", "the City Record notices panel on solicitation/contract/vendor "
@@ -88,9 +110,10 @@ INVENTORY = {
     "[oce] composition unavailable: {}":
         ("error", "the Overview's whole composition bar; `available: False` "
                   "renders as nothing at all"),
-    "[oce] expiring re-bid lookup failed: {}":
-        ("error", "queue-wide signal — every row silently loses its "
-                  "no-open-solicitation flag"),
+    "[oce] expiring successor lookup failed: {}":
+        ("warning", "one dossier line per row degrades to 'none on record'; "
+                    "nothing is flagged on it (the flag it replaced was retired "
+                    "2026-09-24)"),
     "[oce] vendor concentration lookup failed: {}":
         ("error", "queue-wide signal — every row silently loses its lock-in flag"),
     "[oce] vendor+agency lookup failed: {}":
@@ -103,6 +126,36 @@ INVENTORY = {
     "[oce] pipeline vendor set unavailable: {}":
         ("error", "the whole pipeline block returns an empty shell that a reader "
                   "cannot distinguish from 'there are no vehicles'"),
+    # ⚠ The four section-search arms are WARNING, not ERROR, and the reasoning is
+    # the same split routers/search.py::_rows already makes: each arm degrades
+    # ALONE (its own try/except), so one failing costs its group and leaves the
+    # other three answering — a per-group loss, not a page-wide one. And the
+    # likeliest cause is a derived table absent in a fresh environment, which this
+    # repo deliberately treats as a legitimate state rather than an incident.
+    # ⚠ What makes the silence acceptable HERE and not in #256 is that the payload
+    # always returns every group with a count, so an empty arm is visible in the
+    # response instead of being indistinguishable from "no matches".
+    "[oce] section search: products arm failed: {}":
+        ("warning", "one search group loses its rows; the other three still "
+                    "answer, and an absent license_family is a fresh-env state"),
+    "[oce] section search: vendors arm failed: {}":
+        ("warning", "one search group only — see the products arm"),
+    "[oce] section search: agencies arm failed: {}":
+        ("warning", "one search group only — see the products arm"),
+    "[oce] section search: contracts arm failed: {}":
+        ("warning", "one search group only — see the products arm"),
+    "[oce] renewal calendar unavailable: {}":
+        ("error", "the Contracts page's renewal calendar disappears entirely, and "
+                  "an absent calendar reads as 'nothing renews' on the page whose "
+                  "whole subject is what renews when — the permanently-red "
+                  "monitor's shape, inverted"),
+    "[oce] award-by-start-year failed: {}":
+        ("error", "the Overview's whole by-year chart goes, and it is the only "
+                  "view in which the section's value is broken out over time — "
+                  "same reasoning as the composition bar above. The page states "
+                  "'unavailable' rather than rendering nothing, so the reader can "
+                  "tell a failure from an empty universe, but nobody would be "
+                  "alerted at WARNING"),
     # pre-existing ERRORs, pinned so a future edit cannot quietly demote them
     "[cache] transactions pre-warm failed: {}":
         ("error", "pre-existing — the outer warm failed entirely, not one widget"),

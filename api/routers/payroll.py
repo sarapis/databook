@@ -27,6 +27,11 @@ import duckdb
 from fastapi import APIRouter, HTTPException, Response
 
 from modules.duckpool import to_duckdb_thread
+# ⚠ IMPORTED, NOT REIMPLEMENTED — `_fy_of` is the site's one definition of the NYC
+# fiscal year (Jul 1-Jun 30, labelled by end year). routers/licenses.py imports it
+# for exactly this purpose; a second copy here could drift and would then disagree
+# with every other chart about which year is still in progress.
+from routers.oce import _fy_of
 
 router = APIRouter(prefix="/oce/payroll", tags=["payroll"])
 
@@ -96,7 +101,7 @@ def _latest_full_fy(max_year):
 
 
 _EMPTY = {"available": False, "latest_year": None, "totals": {}, "by_year": [],
-          "by_agency": [], "by_title": [], "by_payroll_type": []}
+          "partial": [], "by_agency": [], "by_title": [], "by_payroll_type": []}
 
 
 def _query_summary() -> dict:
@@ -108,10 +113,23 @@ def _query_summary() -> dict:
         f"COALESCE(SUM(other),0), COALESCE(SUM(records),0), {_AVGSAL} FROM {src} WHERE fiscal_year = ?",
         [latest]
     ).fetchone()
+    # ⚠ Every OTHER query here is scoped to `latest`; this one deliberately spans the
+    # whole lake, which is what makes it the one place a partial year can be drawn as
+    # though it were complete. The refresh pulls the IN-PROGRESS FY every month, so as
+    # soon as it lands there is a year in here with a couple of months of pay in it —
+    # FY2027 measured $6.85B against FY2026's $35.25B, which renders as a collapse in
+    # City payroll rather than as a year that has not finished. Split by the clock, not
+    # by MAX(fiscal_year): the lake can carry future-dated rows, so a max-based rule
+    # marks a year complete that is not. Same treatment, and the same reason, as
+    # licenses._window: EXCLUDED from the bars, REPORTED in `partial`, never dropped.
     by_year = con.execute(
         f"SELECT fiscal_year, COALESCE(SUM(gross),0), COALESCE(SUM(overtime),0) "
         f"FROM {src} GROUP BY fiscal_year ORDER BY fiscal_year"
     ).fetchall()
+    cur_fy = _fy_of(datetime.date.today().isoformat()) or 0
+    _yr = [(int(y), float(gg), float(oo)) for (y, gg, oo) in by_year if y is not None]
+    complete_years = [r for r in _yr if r[0] < cur_fy]
+    partial_years = [r for r in _yr if r[0] >= cur_fy]
     by_agency = con.execute(
         f"SELECT agency, COALESCE(SUM(gross),0) g, COALESCE(SUM(overtime),0) ot, "
         f"COALESCE(SUM(records),0) r FROM {src} WHERE fiscal_year = ? AND agency IS NOT NULL "
@@ -132,8 +150,13 @@ def _query_summary() -> dict:
         "totals": {"gross": float(g), "base": float(b), "overtime": float(ot),
                    "other": float(oth), "records": int(rec), "avg_salary": float(avgsal),
                    "ot_share": (float(ot) / float(g)) if g else 0.0},
-        "by_year": [{"year": int(y), "gross": float(gg), "overtime": float(oo)}
-                    for (y, gg, oo) in by_year if y is not None],
+        "by_year": [{"year": y, "gross": gg, "overtime": oo}
+                    for (y, gg, oo) in complete_years],
+        # The fiscal year(s) still in progress. Served so the page can say so, and so
+        # `by_year` + `partial` still accounts for every year in the lake — a chart that
+        # silently drops rows reads as the whole inventory. A test pins the closure.
+        "partial": [{"year": y, "gross": gg, "overtime": oo}
+                    for (y, gg, oo) in partial_years],
         "by_agency": [{"agency": a, "gross": float(gg), "overtime": float(oo), "records": int(r)}
                       for (a, gg, oo, r) in by_agency],
         "by_title": [{"title": t, "gross": float(gg), "avg_salary": float(a)} for (t, gg, a) in by_title],

@@ -45,20 +45,66 @@ logging.basicConfig(
 )
 logger = logging.getLogger("databook-mcp")
 
+from modules import agencyalias
+
 # Session tracking - captures transport session ID from MCP
-_current_session = {"id": None, "start_time": None, "request_count": 0}
+#
+# ⚠ `client` exists so USAGE ANALYTICS CAN EXCLUDE OUR OWN MONITORING. Sessions
+# are opaque ids, so before this the daily MCP tool audit (40 calls/day, every
+# day) was indistinguishable in the log from a real user session — i.e. the
+# health check would have been read as user demand. See scripts/usage-rollup.sh,
+# which excludes on this value.
+#
+# ⚠ It is derived from the User-Agent header, NOT from `initialize`'s
+# `params.clientInfo.name`. clientInfo would be more precise, but reading it
+# means buffering and replaying the ASGI `receive` stream, and this transport is
+# streaming — a subtly broken replay would degrade every MCP session to fix an
+# analytics label. The header is already in `scope` and costs nothing.
+_current_session = {"id": None, "start_time": None, "request_count": 0,
+                    "client": None}
 
 # Structured log storage for export
 _tool_logs = []
 MAX_LOGS = 1000  # Keep last 1000 logs in memory
 
 
-def set_session_id(session_id: str):
-    """Set the current session ID from MCP transport."""
+# Bound the label so a hostile User-Agent cannot bloat a log line, and strip the
+# delimiters the log format and the rollup parser rely on so it cannot inject a
+# fake field.
+#
+# ⚠⚠ 60 WAS TOO SHORT AND SILENTLY DEFEATED THE WHOLE POINT. The audit identifies
+# itself by APPENDING `databook-mcp-audit/1` to a browser-shaped UA (134 chars),
+# so a 60-char cap cut the token off — the label read
+# "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/" and the rollup
+# classified our own daily health check as `browser`, i.e. as a real user. That is
+# the exact defect this field exists to prevent, reintroduced by its own length
+# limit, and it was invisible until the rendered log line was read.
+# 200 comfortably fits a real UA plus a suffix. Cardinality is not a concern here:
+# the ROLLUP maps this to a closed vocabulary, so the table cannot grow with it.
+_CLIENT_MAX = 200
+
+
+def _client_label(ua: str) -> str:
+    """A short, delimiter-free client label from a User-Agent."""
+    ua = (ua or "").strip()
+    if not ua:
+        return "unknown"
+    ua = ua.replace("|", "/").replace("\n", " ").replace("\r", " ")
+    return ua[:_CLIENT_MAX]
+
+
+def set_session_id(session_id: str, client: str = ""):
+    """Set the current session ID from MCP transport.
+
+    `client` is the caller's User-Agent, logged so usage analytics can tell a
+    real session from our own daily audit. Optional and defaulted so an older
+    caller keeps working.
+    """
     _current_session["id"] = session_id
     _current_session["start_time"] = datetime.now().isoformat()
     _current_session["request_count"] = 0
-    logger.info(f"SESSION SET: {session_id}")
+    _current_session["client"] = _client_label(client)
+    logger.info(f"SESSION SET: {session_id} | CLIENT: {_current_session['client']}")
 
 
 def get_logs():
@@ -78,6 +124,7 @@ def log_tool_call(func):
     async def wrapper(*args, **kwargs):
         tool_name = func.__name__
         session_id = _current_session.get("id") or "unknown"
+        client = _current_session.get("client") or "unknown"
         _current_session["request_count"] = _current_session.get("request_count", 0) + 1
         request_num = _current_session["request_count"]
         timestamp = datetime.now().isoformat()
@@ -85,7 +132,7 @@ def log_tool_call(func):
         # Log the call with all arguments
         logger.info(f"{'='*60}")
         logger.info(f"TOOL CALL: {tool_name}")
-        logger.info(f"SESSION: {session_id} | REQUEST #{request_num}")
+        logger.info(f"SESSION: {session_id} | CLIENT: {client} | REQUEST #{request_num}")
         logger.info(f"ARGS: {args}")
         logger.info(f"KWARGS: {json.dumps(kwargs, default=str)}")
         
@@ -129,6 +176,7 @@ def log_tool_call(func):
             log_entry = {
                 "timestamp": timestamp,
                 "session_id": session_id,
+                "client": client,
                 "request_num": request_num,
                 "tool_name": tool_name,
                 "args": json.dumps(kwargs, default=str),
@@ -147,6 +195,7 @@ def log_tool_call(func):
         log_entry = {
             "timestamp": timestamp,
             "session_id": session_id,
+            "client": client,
             "request_num": request_num,
             "tool_name": tool_name,
             "args": json.dumps(kwargs, default=str),
@@ -320,6 +369,72 @@ def slugify(text: str) -> str:
 # ============================================================================
 # Database Overview Tool
 # ============================================================================
+
+async def _org_mapped_agency_condition(agency, param_idx, column):
+    """Agency filter for tables the normalizer already mapped (`wegov-org-id`).
+
+    ⚠⚠ A DIFFERENT MECHANISM FROM `_passport_agency_condition`, ON PURPOSE.
+    `contracts`/`solicitations` carry no org id, so those need the curated seed.
+    `nycjobs` and `payrolldata` DO carry one, stamped at ingest and measured
+    complete and valid (59/59 and 170/170 agencies resolve to a live org, 0
+    dangling) — so a seed here would duplicate a mapping that already exists and
+    would drift from it. Resolve the term to org ids and filter on the column.
+
+    ⚠ THE GAP IT CLOSES, measured 2026-09-02 against each agency's own canonical
+    org name: 36 of 59 job agencies (2,075 of 2,923 postings) and 136 of 170
+    payroll agencies (4,929,787 of 6,775,830 rows, 73%) were unreachable.
+    `DEPT OF ED PEDAGOGICAL` alone is 1,315,181 rows.
+
+    ⚠ IT UNIFIES, and that is intended rather than incidental: the Department of
+    Education is FIVE payroll strings and CUNY several more, so an org-id filter
+    gathers them and totals GROW. A caller wanting one sub-agency still gets it,
+    because the raw ILIKE is kept and OR-ed — this can only ADD rows.
+    """
+    ids = await agencyalias.org_ids_for_term(
+        lambda sql, params: query(sql, *params), agency, logger)
+    if ids:
+        return (f'({column} ILIKE ${param_idx} OR "wegov-org-id" = ANY(${param_idx + 1}))',
+                [f"%{agency}%", ids], param_idx + 2)
+    return (f"{column} ILIKE ${param_idx}", [f"%{agency}%"], param_idx + 1)
+
+
+def _passport_agency_condition(agency, param_idx, column="agency"):
+    """Build a PASSPort agency filter, expanded through the curated alias map.
+
+    ⚠⚠ A BARE ILIKE HERE RETURNED A REASSURING ZERO FOR AGENCIES HOLDING BILLIONS.
+    `contracts.agency` stores legacy names, orthographic variants and City budget
+    codes, so a search by an agency's CURRENT canonical name matched nothing:
+    agency="Technology and Innovation" -> 0 contracts, while
+    agency="INFORMATION TECHNOLOGY" -> 1,381 contracts / $6,778,323,968. Same
+    agency. A zero reads as "this agency has no contracts", not "your string did
+    not match ours" -- the reassuring direction, and the dangerous one. Measured
+    2026-09-01: 11 of 46 distinct agency strings resolved to no org at all,
+    covering 3,838 contracts and $23,171.9M.
+
+    ⚠ The raw ILIKE is KEPT and OR-ed, never replaced, so every agency that
+    already matched still matches: this can only ADD rows.
+
+    ⚠⚠ FOR THE PASSPORT VOCABULARY ONLY -- `contracts.agency` and
+    `solicitations."Agency"`. That those two share a vocabulary is MEASURED, not
+    assumed: the unresolved set is the SAME ELEVEN STRINGS in both tables, so the
+    map applies to solicitations by evidence rather than by resemblance.
+
+    ⚠ It must NOT be reused for the jobs or payroll tools. Measured the same day,
+    `nycjobs."Agency"` is a THIRD vocabulary -- heavily abbreviated
+    ("DEPT OF CITYWIDE ADMIN SVCS", "TECHNOLOGY & INNOVATION") -- and only 6 rows
+    match any of the eleven. Applying this map there would be the suffix-list
+    defect: a map that looks applicable and silently answers a different question.
+    Those tools have their own gap (jobs stores the CURRENT name where contracts
+    store the legacy one) and need their own curated map.
+
+    Returns (condition_sql, params_to_append, next_param_idx).
+    """
+    hits = agencyalias.agency_strings_for_term(agency, logger)
+    if hits:
+        return (f"({column} ILIKE ${param_idx} OR {column} = ANY(${param_idx + 1}))",
+                [f"%{agency}%", hits], param_idx + 2)
+    return (f"{column} ILIKE ${param_idx}", [f"%{agency}%"], param_idx + 1)
+
 
 @mcp.tool(annotations=READ_ONLY_ANNOTATIONS)
 @log_tool_call
@@ -1330,9 +1445,9 @@ async def search_contracts(
         param_idx += 1
     
     if agency:
-        conditions.append(f"agency ILIKE ${param_idx}")
-        params.append(f"%{agency}%")
-        param_idx += 1
+        _cond, _prm, param_idx = _passport_agency_condition(agency, param_idx)
+        conditions.append(_cond)
+        params.extend(_prm)
     
     if status:
         conditions.append(f"status ILIKE ${param_idx}")
@@ -1455,9 +1570,9 @@ async def get_contract_stats(
     param_idx = 1
     
     if agency:
-        conditions.append(f"agency ILIKE ${param_idx}")
-        params.append(f"%{agency}%")
-        param_idx += 1
+        _cond, _prm, param_idx = _passport_agency_condition(agency, param_idx)
+        conditions.append(_cond)
+        params.extend(_prm)
     
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
     
@@ -1557,9 +1672,11 @@ async def search_solicitations(
         param_idx += 1
     
     if agency:
-        conditions.append(f""""Agency" ILIKE ${param_idx}""")
-        params.append(f"%{agency}%")
-        param_idx += 1
+        # Same PASSPort vocabulary as contracts — measured: the unresolved set is
+        # the SAME eleven strings in both tables.
+        _cond, _prm, param_idx = _passport_agency_condition(agency, param_idx, '"Agency"')
+        conditions.append(_cond)
+        params.extend(_prm)
     
     if status:
         conditions.append(f""""RFx Status" ILIKE ${param_idx}""")
@@ -1797,6 +1914,18 @@ async def search_jobs(
     
     Returns:
         List of matching job postings with salary info
+    
+    ⚠ SCOPE — THIS IS ONE PORTAL, NOT ALL CITY HIRING. `nycjobs` is the City's
+    central careers portal (cityjobs.nyc.gov), and it is a CURRENT snapshot, not a
+    history. Employers that run their own hiring systems are absent entirely:
+    measured 2026-09-02, the Department of Education (teachnyc.net), CUNY
+    (cuny.edu/employment), the Board of Elections (vote.nyc), the City Council,
+    the District Attorneys and the Borough Presidents all have ZERO postings here
+    while employing a large share of the municipal workforce.
+
+    So an agency returning no jobs may simply hire elsewhere, and a total from
+    this tool is NOT a count of every City vacancy. Say so when reporting one.
+    ⚠ Payroll tools are unaffected — `payrolldata` does cover those employers.
     """
     limit = min(limit, 50)
     
@@ -1810,9 +1939,10 @@ async def search_jobs(
         param_idx += 1
     
     if agency:
-        conditions.append(f""""Agency" ILIKE ${param_idx}""")
-        params.append(f"%{agency}%")
-        param_idx += 1
+        # Normalizer-mapped table — resolve through wegov-org-id, not a seed.
+        _cond, _prm, param_idx = await _org_mapped_agency_condition(agency, param_idx, '"Agency"')
+        conditions.append(_cond)
+        params.extend(_prm)
     
     if category:
         conditions.append(f""""Job Category" ILIKE ${param_idx}""")
@@ -1936,9 +2066,10 @@ async def get_salary_stats(
     param_idx = 1
     
     if agency:
-        conditions.append(f""""Agency Name" ILIKE ${param_idx}""")
-        params.append(f"%{agency}%")
-        param_idx += 1
+        # Normalizer-mapped table — resolve through wegov-org-id, not a seed.
+        _cond, _prm, param_idx = await _org_mapped_agency_condition(agency, param_idx, '"Agency Name"')
+        conditions.append(_cond)
+        params.extend(_prm)
     
     if title:
         conditions.append(f""""Title Description" ILIKE ${param_idx}""")
@@ -2017,9 +2148,10 @@ async def get_top_salaries(
     param_idx = 1
 
     if agency:
-        conditions.append(f""""Agency Name" ILIKE ${param_idx}""")
-        params.append(f"%{agency}%")
-        param_idx += 1
+        # Normalizer-mapped table — resolve through wegov-org-id, not a seed.
+        _cond, _prm, param_idx = await _org_mapped_agency_condition(agency, param_idx, '"Agency Name"')
+        conditions.append(_cond)
+        params.extend(_prm)
 
     if fiscal_year:
         conditions.append(f""""Fiscal Year" = ${param_idx}""")

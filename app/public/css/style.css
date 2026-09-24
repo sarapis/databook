@@ -672,28 +672,40 @@ tr.shown td.details-control {
   border-color: var(--db-link);
 }
 
+/* Small floating circle, bottom-right -- not a full-width bar. Same
+   accent-blue treatment as the digital-services storyboard's Skip/Show
+   story buttons, so a light-blue floating control reads as one convention. */
 #return-to-top {
-  padding: 10px 30px !important;
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1050;
+  padding: 0 !important;
 }
 
 #return-to-top a {
-  font-weight: normal;
-  font-size: 16px;
-  color: var(--db-gray-600);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--db-accent);
+  box-shadow: var(--db-shadow-md);
+  text-decoration: none;
+  transition: background .15s ease, transform .15s ease;
 }
 
-#return-to-top a span {
-  text-decoration: underline;
-}
-
-#return-to-top a:hover span,
-#return-to-top a:hover i {
-  color: var(--db-link);
+#return-to-top a:hover {
+  background: var(--db-link);
+  transform: translateY(-2px);
 }
 
 #return-to-top a i {
   font-size: 18px;
-  margin-left: 5px;
+  margin: 0;
+  color: var(--db-on-dark);
 }
 
 #footer-menu {
@@ -749,7 +761,14 @@ tr.shown td.details-control {
   width: 100%;
 }
 
-.dataTables_wrapper .dataTables_filter input {
+/* ⚠ `:not(.db-search)` is load-bearing. At (0,2,1) this rule beat
+   `.db-search input` (0,1,1), so a filter box that had been given the
+   site's own search component still rendered with 0 radius and no room
+   for its icon -- measured via the cascade, not guessed. Scoping it out
+   lets the component own the look with no values restated here, and
+   every other DataTable in the app (which has no such class) is
+   untouched. */
+.dataTables_wrapper .dataTables_filter label:not(.db-search) input {
   border: 1px solid var(--db-gray-900);
   border-left: none;
   border-right: none;

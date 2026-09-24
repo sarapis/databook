@@ -10,8 +10,21 @@
 	<script type="text/javascript" language="javascript" src="https://cdn.datatables.net/1.10.23/js/jquery.dataTables.min.js"></script>
 	<script type="text/javascript" src="https://cdn.datatables.net/v/dt/jq-3.3.1/dt-1.10.23/r-2.2.7/sp-1.2.2/sl-1.3.1/datatables.min.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-	<script type="text/javascript" src="/js/script.js?v=2"></script>
+	{{-- ⚠ filemtime, not a hardcoded version. This was `?v=2`, so an edit to
+	     script.js never reached a browser that had already cached it — the file
+	     changes, the URL does not, and the fix silently does not ship. Every
+	     other first-party asset here already busts on filemtime. --}}
+	<script type="text/javascript" src="{{ asset('js/script.js') }}?v={{ filemtime(public_path('js/script.js')) }}"></script>
 	<script type="text/javascript" src="{{ asset('js/db-charts.js') }}?v={{ filemtime(public_path('js/db-charts.js')) }}"></script>
+	{{-- ⚠ Charts derived from a DataTable's FILTERED rows — one owner, so a
+	     chart and the table beside it cannot answer the same question
+	     differently. Loaded beside db-charts.js, which it uses for the palette
+	     and the money formatter; neither needs Chart.js at load time. --}}
+	<script type="text/javascript" src="{{ asset('js/db-table-charts.js') }}?v={{ filemtime(public_path('js/db-table-charts.js')) }}"></script>
+	{{-- The Digital Services table standard (10 a page, click-sort, a money sort
+	     that understands $1.04B / $587K). Opt in per table with class `db-dt`;
+	     inert on every page that uses none. --}}
+	<script type="text/javascript" src="{{ asset('js/db-tables.js') }}?v={{ filemtime(public_path('js/db-tables.js')) }}"></script>
 
     <!-- Fonts -->
     <link rel="dns-prefetch" href="//fonts.gstatic.com">
@@ -76,7 +89,12 @@
 	<!-- /Loader -->
 	
     <div id="app" class="container-fluid p-0">
-        <header>
+        {{-- .db-chrome is what actually sticks. The bars inside it each declare
+             position:sticky, but a sticky box can only travel inside its PARENT and
+             this wrapper is exactly as tall as they are -- so for as long as it has
+             existed, every one of those declarations has been inert. Sticking the
+             wrapper is what realises them. --}}
+        <header class="db-chrome">
            	@yield('menubar')
         </header>
 
@@ -139,7 +157,7 @@
 		</footer>
 
 		<div id="return-to-top" style="display:none;">
-			<a href="#" onclick="topFunction()"><span>Return to top</span> <i class="bi bi-arrow-up-circle-fill"></i></a>
+			<a href="#" onclick="topFunction()" aria-label="Return to top"><i class="bi bi-arrow-up"></i></a>
 		</div>
 		@yield('scripts')
 

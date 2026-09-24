@@ -1,0 +1,33 @@
+# Known NYC programs and systems, for measuring the name extractor's RECALL.
+# ONE ROW PER NAME. Every row must carry a source — a name nobody can verify is
+# not ground truth, it is a guess with a citation slot.
+#
+# ⚠⚠ THIS FILE IS NOT A PROMOTION PATH. Nothing reads it except
+# eval_program_names.py. A name becomes a program only via program_curated.csv.
+#
+# ⚠ `expect` records whether the name SHOULD be findable from contract titles:
+#     yes      the extractor ought to surface it
+#     absent   verified real, but not present in this corpus — NOT a recall miss
+#     unknown  not yet checked
+# The distinction is the whole point: LinkNYC appears in 0 tech contracts, so
+# missing it measures the CORPUS, not the extractor. Conflating the two would
+# make recall look worse than it is and hide the real misses.
+#
+# ⚠ Sources are nyc.gov pages reached via web SEARCH — direct fetch/curl returns
+# 403 from this environment, which is a block, not a 404.
+name,expect,source,note
+MyCity,yes,https://portal.311.nyc.gov/article/?kanumber=KA-03557,unified City services and benefits portal
+NYC311,absent,https://on.nyc.gov/AboutNYC311,"⚠ the LITERAL string NYC311 appears 0 times; titles say '311 Call Center Services' and 'NYC 311' with a space. My '7 contracts' claim came from ILIKE '%311%' which also matched the contract number 7-858-0311A. A bare number cannot be tokenised (the token regex requires a leading letter), so this is a corpus+tokeniser limit, not an ID_LIKE bug"
+ACCESS HRA,yes,https://www.nyc.gov/site/hra/help/accesshra.page,"HRA benefits web + mobile platform; 5 contracts / 5 vendors / 2 agencies — past every gate, and invisible anyway until the bigram pass, because HRA alone is agency vocabulary"
+LinkNYC,absent,https://www.nyc.gov/connect/mobile-applications.page,free wifi kiosks; 0 tech contracts — franchise not procurement
+Big Apple Connect,absent,https://on.nyc.gov/NYCBigAppleConnect,NYCHA broadband; 0 tech contracts under this name
+HERRC,yes,https://edc.nyc/humanitarian-emergency-response-and-relief-centers-rfp,Humanitarian Emergency Response and Relief Centers (H+H)
+PASSPort,yes,https://www.nyc.gov/site/mocs/systems/about-passport.page,MOCS procurement system — the worked example
+IDNYC,yes,https://www.nyc.gov/site/idnyc/index.page,municipal ID card program
+NYC3,yes,https://www.nyc.gov/content/oti/pages/,NYC Cyber Command
+NG911,yes,https://www.nyc.gov/content/oti/pages/,"⭐ Next Generation 911 — the largest single recall win, silently dropped by the old ID_LIKE regex until the fix admitted it. ⚠ TWO counts, both correct, for different questions: 72 titles MENTION it and 66 are REACHABLE as a token. The 6-title gap is fusion the tokeniser cannot split — NG911FDNY, NG911NYPD, NG911CALLHANDLING(DELL) are real references it cannot see, Z0006NG911 and ANG911 are incidental. 66 was in this note from the start and is the reachable figure; I briefly called it stale because it matched neither of my first two measurements, when it was answering the question I had not measured yet"
+OCSS,yes,https://data.cityofnewyork.us/Social-Services/NYC-Benefits-Platform-Benefits-and-Programs-Datase/kvhd-5fmu/about_data,Office of Child Support Services; found
+SYEP,yes,https://data.cityofnewyork.us/Social-Services/NYC-Benefits-Platform-Benefits-and-Programs-Datase/kvhd-5fmu/about_data,"Summer Youth Employment Program — 3 contracts but only 2 distinct vendors, so MIN_VENDORS=3 removes it. ⚠ MEASURED 2026-08-29 and the gate is RIGHT to: lowering it to 2 admits +654 candidates (138% more to judge, 19 batches -> 46) and the largest newly admitted are generic procurement words — Speed $537.6M, Dispatch, Ambulance, Litigation, Personnel, Tenant. Keep the gate; this is a known, priced miss, not an open question"
+Home Energy Assistance Program,yes,https://data.cityofnewyork.us/Social-Services/NYC-Benefits-Platform-Benefits-and-Programs-Datase/kvhd-5fmu/about_data,"HEAP — 1 tech contract, MISSED by MIN_CONTRACTS=2. Four words, so the bigram pass cannot form it either; both would have to change"
+Fair Fares,yes,https://www.nyc.gov/site/fairfares/index.page,"half-price transit for low-income New Yorkers. Two-word name — invisible to a unigram extractor, recovered by the bigram pass"
+DOB NOW,yes,https://www.nyc.gov/site/buildings/property-or-business-owner/dob-now.page,"⭐ Buildings' self-service filing system. The worked example for why a bigram half may be agency vocabulary: BOTH halves are (NOW only because the org register holds 'National Organization for Women'), so a policy testing both would lose it"

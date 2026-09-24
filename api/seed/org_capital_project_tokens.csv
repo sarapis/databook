@@ -1,0 +1,26 @@
+# Curated map: a wegov_orgs id -> the token that identifies its capital projects
+# in `capitalprojectsdollarscomp`.`PROJECT_DESCR` / `SCOPE_TEXT`.
+#
+# WHY. Some organizations deliver capital work without ever being its MANAGING or
+# SPONSORING agency, so they hold no row in the capital plan under their own id and
+# their Capital Projects tab is empty. The projects still exist — carried on the
+# capital budget of the agency that contracts them.
+#
+# ⚠⚠ MATCHED WITH A WORD BOUNDARY, NEVER A BARE SUBSTRING. `%EDC%` matches
+# **INCLUDEDCITY** (INCLUDED + CITY, run together in a DDC scope text) and pulled
+# in 11 unrelated road-reconstruction projects: 26 projects by substring against
+# 15 with `\mEDC\M`. A three-letter token is exactly the case this repo keeps
+# paying for (%UI% matches BUILDING, %ABA% matches DATABASE).
+#
+# ⚠ THIS IS TEXT EVIDENCE, NOT AN AUTHORITATIVE LINK, and the page must say so.
+# It is the description naming the organization — good enough to show, not good
+# enough to assert ownership. The set it produces for EDC is recognisably right:
+# Brooklyn Cruise Terminal, Hunts Point Meat Market, Bushwick Inlet, Queens West
+# Acquisition, East River Esplanade, Four Freedoms Park and the Hurricane Sandy
+# asset-management work.
+#
+# ⚠ Add a row only where the token is DISTINCTIVE. A common word would attach a
+# random slice of the capital plan to an organization, which is worse than an
+# empty tab.
+org_id,token,why
+170010998,EDC,"NYCEDC is not a City agency and appears in NO capital table under its own id: the 26 managing agencies are the bodies holding their own capital budget lines. Its projects sit on other agencies' budgets — mostly Small Business Services, its contracting agency, plus Parks, DCAS, DEP, Cultural Affairs and HHC. Word-boundary \\mEDC\\M finds 15 projects across all publication vintages and 9 in the latest (PUB_DATE 20231026); a bare %EDC% substring finds 26, of which 11 are INCLUDEDCITY false positives."

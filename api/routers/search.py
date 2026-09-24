@@ -23,6 +23,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Query
 from modules.postgrex.asyncmodel import PostgresModelAsync
+from modules import sourcedupes
 from modules.duckpool import to_duckdb_thread
 from modules.errfmt import exc_str
 from modules import orgfilter
@@ -226,12 +227,14 @@ async def _solicitations(like, term, prefix, limit):
 
 
 async def _schools(like, term, prefix, limit):
-    rows = await _rows("""
+    # ⚠ Deduped, or the 59 schools the City publishes twice appear twice in the
+    # results and twice in the navbar typeahead. modules/sourcedupes owns it.
+    rows = await _rows(f"""
         WITH q AS (SELECT plainto_tsquery('english', $4) AS tsq)
         SELECT location_code AS code, location_name AS name,
                "location_type_description" AS typ,
                ts_rank(to_tsvector('english', location_name), q.tsq) AS rnk
-        FROM schoollocations, q
+        FROM {sourcedupes.relation('schoollocations')}, q
         WHERE location_name ILIKE $1
            OR to_tsvector('english', location_name) @@ q.tsq
         ORDER BY (location_name ILIKE $2) DESC, rnk DESC NULLS LAST

@@ -57,7 +57,7 @@
 			<div class="col-md-12">
 				<div class="bottom_lastupdate">
 		@if ($dataset)
-					<p class="lead"><img src="/img/info.png" alt=""> This data comes from <a href="{{ $dataset['Citation URL'] }}" target="_blank" rel="nofollow">{{ $dataset['Name'] ?? '' }}</a><span class="float-right" style="font-weight: 300;"><i>Last updated {{ explode(' ', $dataset['Last Updated'] ?? '')[0] }}</i></span></p>
+					<p class="lead"><img src="/img/info.png" alt=""> This data comes from <a href="{{ $dataset['Citation URL'] }}" target="_blank" rel="nofollow">{{ $dataset['Name'] ?? '' }}</a><span class="float-right" style="font-weight: 300;"><i>Last updated {{ \App\Custom\CapitalDate::label($dataset['Last Updated'] ?? '') }}</i></span></p>
 				</div>
 			</div>
 		</div>
@@ -66,24 +66,9 @@
 		{{--
 			<div class="container">
 				<div class="row mb-4">
-					<div id="data_container_accordion" class="col-12 accordion">
-					
-						<div class="accordion social_media" id="accordionThree">
-							<div>
-								<div id="headingThree">
-									<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-										We’re using normalized data from <span id="total_datasets"></span> datasets containing <span id="total_records"></span> records. Click here to learn more.
-									</button>
-								</div>
-								<div id="collapseThree" class="collapse hide" aria-labelledby="headingOne" data-parent="#accordionThree">
-									<div class="card-text table-responsive">
-										<table id="dsStatsTable" class="db-table display table-hover table-borderless" style="width:100%;">
-										</table>
-									</div>
-								</div>
-							</div>
-						</div>
-					</div>
+					{{-- One shell, from the shared provenance component. This markup was
+					     hand-rolled on fifteen views, each with its own per-page fetch. --}}
+					<x-db.data-provenance mode="page" :datasets="$datasets" id="mProjectsDs" />
 				</div>
 			</div>
 		--}}
@@ -100,26 +85,6 @@
 		var data = {!! json_encode($data) !!}
 		
 		{{--var datasets = {!! json_encode(array_values($datasets)) !!}
-			var dsstats_table = null
-
-			function loadTableStat(dsName, url) {
-				var dsstats_table = $('#dsStatsTable').DataTable();
-				fapireq(url, function (resp) {
-					if (resp['data'][0]['res']) {
-						$('#stats_'+dsName).text(resp['data'][0]['res'])
-						$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['res'])
-						$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
-					} else {
-						datasets.forEach(function (d, i) {
-							if (d[4].indexOf('stats_'+dsName) != -1) {
-								datasets.splice(i, 1)
-								dsstats_table.row(i).remove()
-								dsstats_table.draw();
-							}
-						})
-					}
-				})
-			}
 		--}}
 
 		$(document).ready(function() {
@@ -188,27 +153,6 @@
 			});
 
 			{{--
-				dsstats_table = $('#dsStatsTable').DataTable({
-					data: datasets,
-					paging: false,
-					columns: [
-						{ title: "Name" },
-						{ title: "Section" },
-						{ title: "Description" },
-						{ title: "Last Updated" },
-						{ title: "Dataset Records" }
-					],
-					order: [],
-					dom: 'rtp',
-					initComplete: function () {
-						@foreach($datasets as $tbl=>$ds)
-							loadTableStat(
-								"{{ $tbl }}", 
-								"{!! str_replace('tblname', $tbl, $tblStatsUrl) !!}"
-							);
-						@endforeach
-					}
-				});
 			--}}
 		});
 	</script>

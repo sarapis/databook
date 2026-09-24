@@ -79,58 +79,30 @@ async def test_district_capitalprojects_valid_type_uses_crosswalk(client, mock_s
     assert 'capitalprojects_cd_idx' in captured['sql']
 
 
-# ---- the eight district stat tiles ------------------------------------------
-# Same crosswalk, same two hazards, and they never inherited the guard above:
-# one nta district page raised eight UndefinedTableErrors (Sentry DATABOOK-API-P,
-# 8 events in one second) because all eight tiles load per page view.
-
-PSTATS = [
-    'projects_no', 'orig_cost', 'curr_cost', 'over_budg_am',
-    'long_no', 'over_budg_no', 'late_start_no', 'late_end_no',
-]
-
-
-@pytest.mark.parametrize('stat', PSTATS)
-@pytest.mark.asyncio
-async def test_district_pstats_missing_crosswalk_is_null_not_500(client, mock_select, stat):
-    """nta has no capitalprojects_nta_idx crosswalk, so every tile must degrade.
-
-    A single null `res` — NOT empty rows: the frontend reads
-    `resp['data'][0]['res'] ?? '-'`, which renders `-` on a null and throws a
-    TypeError on an empty array. It is also the shape a valid crosswalk with no
-    matching rows already returns.
-    """
-    mock_select.side_effect = asyncpg.exceptions.UndefinedTableError(
-        'relation "capitalprojects_nta_idx" does not exist')
-    r = await client.get(f'/get/districts/pstats-{stat}/nta/MN0101/20210805')
-    assert r.status_code == 200
-    assert r.json() == {'rows': [{'res': None}]}
-
-
-@pytest.mark.parametrize('stat', PSTATS)
-@pytest.mark.asyncio
-async def test_district_pstats_rejects_unsafe_type(client, mock_select, stat):
-    """`type` is interpolated into the table name — reject before any query."""
-    r = await client.get(f'/get/districts/pstats-{stat}/cd;DROP/101/20210805')
-    assert r.status_code == 200
-    assert r.json() == {'rows': [{'res': None}]}
-    mock_select.assert_not_called()
-
-
-@pytest.mark.parametrize('stat', PSTATS)
-@pytest.mark.asyncio
-async def test_district_pstats_valid_type_uses_crosswalk(client, mock_select, stat):
-    """A valid type (cd) still reaches the matching crosswalk table."""
-    captured = {}
-    def fake(sql, params=None):
-        captured['sql'] = sql
-        return {'rows': [{'res': 7}]}
-    mock_select.side_effect = fake
-    r = await client.get(f'/get/districts/pstats-{stat}/cd/101/20210805')
-    assert r.status_code == 200
-    assert r.json() == {'rows': [{'res': 7}]}
-    assert 'capitalprojects_cd_idx' in captured['sql']
-    assert '{}' not in captured['sql']  # the template was actually formatted
+# ---- the eight district stat tiles: RETIRED WITH THEIR ENDPOINTS -----------
+# ⚠⚠ 24 PARAMETRISED GUARDS STOOD HERE AND ARE DELETED (2026-09-10), BECAUSE THE
+# ENDPOINTS THEY TESTED ARE. `/get/districts/pstats-{measure}/{type}/{id}/{pubdate}`
+# — eight measures over `capitalprojectsdollarscomp`, the series NYC retired
+# 2023-10-26 — had no caller left once the district capital tab moved to the
+# spine, and one of the eight computed `over_budg_am`, the `Amount Over Budget`
+# label this section reproduces nowhere. Keeping guards that require a dead
+# endpoint to exist would have forbidden the deletion, which is the same mistake
+# as the family-row guard that had to be retired once family pages existed:
+# RETIRING A GUARD WHEN ITS CONDITION ENDS IS NOT WEAKENING IT.
+#
+# ⭐ WHAT THEY PROTECTED IS NOT LOST, and that is the test of whether a
+# retirement is honest:
+#   * the two HAZARDS — an unsafe `type` interpolated into a table name, and a
+#     missing `capitalprojects_nta_idx` raising instead of degrading — are still
+#     guarded on the LIST endpoint, by `test_district_capitalprojects_*` directly
+#     above, which uses the same crosswalk through the same helper;
+#   * that the routes stay deleted, that the orphaned `_pstats_select` helper
+#     stays deleted, and that no frontend file builds one of those URLs, are
+#     guarded by `test_retired_pstats_routes_are_gone.py`;
+#   * and the one-helper rule below is re-expressed rather than dropped.
+# The original defect is worth remembering either way: one nta district page
+# raised EIGHT `UndefinedTableError`s in one second (Sentry DATABOOK-API-P),
+# because all eight tiles loaded per page view.
 
 
 def test_no_handler_interpolates_the_crosswalk_without_the_guard():
@@ -153,8 +125,17 @@ def test_no_handler_interpolates_the_crosswalk_without_the_guard():
         if 'capitalprojects_{}_idx' in ln and not ln.strip().startswith('#')
     ]
     # Assert the scan looked: a guard that matches nothing passes vacuously.
-    assert len(interpolations) >= 9, (
-        f'expected the 8 stat tiles + the list endpoint, found {len(interpolations)}')
+    # ⚠ The floor was 9 — the list endpoint plus the eight stat tiles — and it
+    # became wrong when the eight were deleted (2026-09-10). It is 1 now, which
+    # is the list endpoint, and that is the whole population: a floor that
+    # counts endpoints has to move when endpoints go, but a floor of ZERO would
+    # make this the zero-files scanner.
+    assert len(interpolations) >= 1, (
+        f'expected the list endpoint at least, found {len(interpolations)}')
     for ln in interpolations:
-        assert '_pstats_select(' in ln or '_district_select(' in ln, (
+        # ⚠ `_pstats_select` left this list because it was DELETED with its
+        # eight callers, not because interpolating outside it became safe. It is
+        # named here so a future reader does not re-add the helper believing a
+        # guard still expects it.
+        assert '_district_select(' in ln, (
             f'crosswalk interpolated outside a guarding helper: {ln.strip()}')

@@ -315,3 +315,133 @@ def test_the_family_payload_reports_the_unsliced_notice_total():
     assert 'count(*) OVER ()' in body, \
         "the total is no longer measured on the unsliced set"
     assert 'LIMIT $2' in body, "the notice list is no longer capped"
+
+
+# ---------------------------------------------------------------------------
+# VENDOR / AMOUNT / CONTRACT on the panel (2026-08-21).
+#
+# The panel listed title, agency, type and date — links only. These three fields
+# are the ONE place the City states a price against a named product: the notice's
+# own award vendor and amount, plus its PIN resolved to a registered contract.
+# Sparse by nature (531 vendor+amount of 3,782 links; 337 contract links), which
+# is precisely why the absent case must render as "not stated" and never as zero.
+# ---------------------------------------------------------------------------
+
+def _builder_src():
+    return _read(os.path.join(ROOT, 'api/build_notice_product_links.py'))
+
+
+def test_the_contract_lookup_cannot_duplicate_a_notice():
+    """⚠⚠ THE DEFECT THIS REPO HAS SHIPPED TWICE (#262, #278).
+
+    `contracts` holds ONE ROW PER AMENDMENT, so
+    `JOIN contracts ON epin = trim(PIN)` multiplies the notice row once per
+    amendment — inflating the panel and any count taken off it. A LATERAL with
+    LIMIT 1 cannot multiply rows, which is why the lookup must stay that shape.
+    """
+    src = _builder_src()
+    assert 'LEFT JOIN LATERAL (' in src, (
+        'the contract lookup is no longer a LATERAL — a plain join against '
+        'contracts duplicates the notice once per amendment')
+    lateral = src[src.index('LEFT JOIN LATERAL ('):]
+    lateral = lateral[:lateral.index(') k ON true') + 12]
+    assert 'FROM contracts' in lateral
+    assert 'LIMIT 1' in lateral, (
+        'the contract LATERAL has lost its LIMIT 1, so a contract with '
+        'amendments re-multiplies the notice row')
+    # And no unbounded join against contracts in the SQL ITSELF.
+    # ⚠ Read the string LITERALS via ast, not the raw file: the comment above the
+    # query explains the trap using the words "JOIN contracts", and the first
+    # draft of this assertion fired on that comment. Fifth time this repo has
+    # paid for a scanner reading prose as code.
+    import ast as _ast
+    sql = ' '.join(
+        n.value for n in _ast.walk(_ast.parse(src))
+        if isinstance(n, _ast.Constant) and isinstance(n.value, str))
+    bare = sql.replace('LEFT JOIN LATERAL', '')
+    assert 'JOIN contracts' not in bare, (
+        'a direct JOIN against contracts has appeared in the SQL — see #262/#278')
+
+
+def test_amount_rejects_blank_and_zero():
+    """⚠⚠ `ContractAmount` IS TEXT AND MOSTLY BLANK — 3,233 of 3,782 linked
+    notices hold the empty string, not NULL, so `count()` on the raw column reads
+    as 100% populated and means nothing. Only genuinely numeric, non-zero values
+    may become an amount: a rendered "$0.00" is a claim the City did not make."""
+    src = _builder_src()
+    assert "~ '^[0-9]+(\\.[0-9]+)?$'" in src, (
+        'the numeric guard on ContractAmount is gone — a blank or junk value '
+        'would fail the cast or render as a figure')
+    assert '::numeric > 0' in src, (
+        'zero amounts must be treated as absent, not rendered as $0.00')
+
+
+def test_the_serving_query_selects_every_column_the_view_reads():
+    """⚠ The #247 seam: a column can exist, be populated, and never reach the
+    page. Pin both ends."""
+    router = _read(os.path.join(ROOT, 'api/routers/licenses.py'))
+    sel = router[router.index('FROM notice_product_links') - 600:
+                 router.index('FROM notice_product_links')]
+    for col in ('vendor', 'amount', 'pin', 'ctr_id'):
+        assert col in sel, f'_notices_for_family no longer selects {col}'
+
+    view = _read(os.path.join(
+        ROOT, 'app/resources/views/procurement/digital-reform-license-family.blade.php'))
+    for key in ("'vendor'", "'amount'", "'ctr_id'", "'pin'"):
+        assert key in view, f'the family view does not read {key}'
+
+
+def test_the_view_renders_absent_amounts_as_not_stated():
+    """A blank amount must read as "not stated", never as zero — and the panel
+    must say the figure is the whole notice's award, not this product's share."""
+    view = _read(os.path.join(
+        ROOT, 'app/resources/views/procurement/digital-reform-license-family.blade.php'))
+    assert '—' in view, 'the em-dash placeholder for an absent value is gone'
+    assert "!== null" in view, (
+        'the amount cell no longer distinguishes null from zero, so a notice '
+        'stating no amount would render as $0')
+    assert 'not this product' in view, (
+        "the panel must state that an amount is the whole notice's award, not "
+        'this product\'s share — otherwise it reads as a product price')
+
+
+def test_amount_bearing_notices_are_ordered_first():
+    """⚠⚠ THE CAP IS WHY THIS MATTERS. Ordered by date alone, Microsoft's $67.5M
+    ELA sat at position 1,184 of 1,220 and the $57.0M citywide master at 396, so
+    a 25-row panel showed recent small notices and hid every large award. Adding
+    the amount column is what made that visible.
+
+    Measured trade, recorded so the ordering is not "tidied" back: of 430 families
+    with links, 181 carry no amount (nothing changes), 248 carry 1-25 (all their
+    awards fit inside the cap AND recency still fills the rest), and exactly one
+    (Microsoft, 53) has more amounts than the cap.
+    """
+    router = _read(os.path.join(ROOT, 'api/routers/licenses.py'))
+    seg = router[router.index('FROM notice_product_links'):]
+    seg = seg[:seg.index('LIMIT')]
+    assert 'ORDER BY amount DESC NULLS LAST' in seg, (
+        'the panel no longer puts amount-bearing notices first, so on a capped '
+        'family the awards fall off the end of the list')
+    # recency must remain the tiebreak, or the 181 families with no amounts get
+    # an arbitrary order
+    assert 'start_date DESC NULLS LAST' in seg, (
+        'date is no longer the tiebreak — the 181 families carrying no amount '
+        'would be ordered arbitrarily')
+
+
+def test_the_cap_sentence_describes_the_actual_order():
+    """⚠ A stale disclosure is the typed-figure defect: the page said "the 25 most
+    recent", which this ordering makes false."""
+    view = _read(os.path.join(
+        ROOT, 'app/resources/views/procurement/digital-reform-license-family.blade.php'))
+    # ⚠ Anchor on the @if USAGE, not the first mention: `$noticesCapped` is
+    # assigned in the @php block at the top of the file, and the first draft of
+    # this guard read that assignment instead of the sentence.
+    i = view.index('@if($noticesCapped)')
+    sentence = ' '.join(view[i:i + 420].split())
+    assert 'most recent of' not in sentence, (
+        'the cap sentence still claims "most recent of N" while the panel orders '
+        'by amount first')
+    assert 'award amount first' in sentence and 'largest first' in sentence, (
+        'the cap sentence must state the real ordering, or the reader cannot '
+        'tell what the 25 rows are')

@@ -1,0 +1,9 @@
+# ⚠⚠ NEVER BAKE A LIVE .env INTO THE IMAGE. `COPY . /var/www` used to copy the
+# box's app/.env — APP_KEY and FAPI_KEY included — into an image layer, where
+# anyone who can pull or `docker save` the image can read it. Measured on prod
+# 2026-09-23: the image's /var/www/.env was byte-identical to the host file.
+# Every compose file bind-mounts ./app/.env at runtime, so the copy bought
+# nothing. `.env.*` also covers `.env.default`, which once carried a live
+# APP_KEY. Pinned by api/tests/test_app_image_env.py.
+.env
+.env.*

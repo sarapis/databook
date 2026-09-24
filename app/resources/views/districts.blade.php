@@ -139,7 +139,19 @@
 					if (features.length) {
 						var title = features[0].properties['nameCol']
 						var center = getBounds(features[0].geometry.coordinates).getCenter()
-						tt = {'cc': 'City Council District ', 'cd': 'Community District ', 'nta': '', 'sd': 'School District '}
+						{{-- ⚠ ONE OWNER. This map was typed here as well as in Schema.php and
+						     Organizations::sitemap(); emitting it from PHP keeps the JS reading
+						     the same values the server-rendered titles use. See
+						     App\Custom\DistrictName.
+						     ⚠⚠ THE SEMICOLON IS LOAD-BEARING — A BLADE COMMENT EATS THE NEWLINE
+						     AFTER IT. The line above this one used to end in a newline, so
+						     automatic semicolon insertion closed the statement; with a comment
+						     before it, `tt = {…}` and the `$(…)` below rendered on ONE line and
+						     the whole block threw `Unexpected identifier '$'` — every function
+						     on /districts undefined, while the page still returned 200. Same
+						     family as the documented Blade-directive-inside-a-JS-comment trap.
+						     Caught by verify_uncaught_js, not by reading the diff. --}}
+						tt = @json(\App\Custom\DistrictName::PREFIX);
 						$('#section_content h1').html(tt[type]+title)
 						$('#details-permalink').text($('#details-permalink').text().replace('dslug', slug(tt[type]+title)))
 						$('.map-loading').hide()
@@ -260,11 +272,32 @@
 		$(document).ready(function() {
 			orgSectionMapInit({!! json_encode($map) !!}, {!! $type ? "'{$type}'" : "''" !!});
 
-			/*
-			map.on('load', function() {
-				showObjects('{!! $prjUrl !!}');
-			})
-			*/
+			{{-- ⚠⚠ THIS BLOCK IS COMMENTED OUT DELIBERATELY AND MUST STAY THAT WAY,
+			     and the page draws its projects anyway. Checked 2026-09-14 because
+			     this is the last page calling `projectsMapDrawFeatures` with no
+			     hold-and-draw guard, and the question was whether the style-vs-data
+			     race is reachable here. IT IS NOT, measured rather than reasoned:
+
+			     `showObjects` is reached ONLY through `changeToggle2`, and
+			     `changeToggle2` is reached only from the four `#{type}-button`
+			     onclick attributes — plus ONE programmatic click, which
+			     `orgSectionMapInit` (script.js) fires from INSIDE `map.on('load')`
+			     behind a 500ms setTimeout. So every path runs after the style has
+			     loaded. ⭐ And `changeToggle2` calls `map.setLayoutProperty` several
+			     lines BEFORE it reaches `showObjects`, so an early call would throw
+			     there first: the race would not even be the first failure.
+
+			     ⚠ The `''` filterType branch cannot occur either — the controller
+			     passes `$type ?? 'cd'`, so this view is never handed an empty type.
+
+			     ⭐ Restoring this block would draw `$prjUrl` a SECOND time, since
+			     that programmatic click already draws it. Measured on the rendered
+			     page (map GEOMETRY, never pixels): /districts 3,077 source features
+			     with `cd-button` active, 0 uncaught JS, container 1400x630.
+			     /districts/sd draws 2,190 — ⚠ it reads 0 on a LOCAL stack, which is
+			     the documented local-data-gating trap and not a defect:
+			     `/get/schools/geojson` serves `{"rows":[]}` locally and 2,190 on
+			     prod. Verify this page's sd branch on prod or not at all. --}}
 
 			$('.dropdown-menu').click(function (e) {
 				e.stopPropagation();

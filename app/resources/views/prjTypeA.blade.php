@@ -35,7 +35,7 @@
 			<div class="row justify-content-center">
 				<div class="col-md-7">
 					<div class="db-eyebrow">Projects</div>
-					<h2>{{ $data[0]['prjtypename'] }} <small>({{ $data[0]['prjtype'] }})</small></h2>
+					<h1 class="db-profile-title">{{ $data[0]['prjtypename'] }} <small>({{ $data[0]['prjtype'] }})</small></h1>
 					<p>* <i>Categories can be shared by multiple project types.</i></p>
 				</div>
 				<div class="col-md-5">
@@ -46,7 +46,12 @@
 							<th scope="col" width="60%" id="pub_date_filter" style="min-width:350px !important;"></th>
 						  </tr>
 						  <tr>
-							<td></td><td>* <i>The most recent publications might not offer project data.</i></td>
+							{{-- ⚠ The sentence went with the columns it described. This page
+							     publishes the Ten-Year Capital Strategy's AMOUNTS; it has no
+							     project data at all, because `capitalstrategy` carries no
+							     project key. Saying "might not offer project data" implied
+							     some publications do. --}}
+							<td></td><td>* <i>Amounts published in the Ten-Year Capital Strategy. Follow a category to see the projects the City has assigned to it.</i></td>
 						  </tr>
 						</thead>
 					</table>
@@ -65,9 +70,6 @@
 									<th scope="col">Funding Sources</th>
 									<th scope="col">Fiscal Year 1 Amount</th>
 									<th scope="col">Ten Year Total</th>
-									<th scope="col">Amount of Projects</th>
-									<th scope="col">Planned Project Cost</th>
-									<th scope="col">Current Project Cost</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -166,24 +168,9 @@
 
 		<div class="container">
 			<div class="row my-4">
-				<div id="data_container_accordion" class="col-12 accordion">
-				
-					<div class="accordion social_media" id="accordionThree">
-						<div>
-							<div id="headingThree">
-								<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-									We’re using normalized data from <span id="total_datasets"></span> datasets containing <span id="total_records"></span> records. Click here to learn more.
-								</button>
-							</div>
-							<div id="collapseThree" class="collapse hide" aria-labelledby="headingOne" data-parent="#accordionThree">
-								<div class="card-text table-responsive">
-									<table id="dsStatsTable" class="db-table display table-hover table-borderless" style="width:100%;">
-									</table>
-								</div>
-							</div>
-						</div>
-					</div>
-				</div>
+				{{-- One shell, from the shared provenance component. This markup was
+				     hand-rolled on fifteen views, each with its own per-page fetch. --}}
+				<x-db.data-provenance mode="scoped" :datasets="$datasets" :statUrl="$tblStatsUrl" scope-label="project type" id="prjTypeADs" />
 			</div>
 		</div>
 
@@ -193,7 +180,6 @@
 		var blTable = null
 		var commTable = null
 		var colors = ['#1f5673', '#759FBC', '#90C3C8', '#B9B8D3', '#463730']
-		var dsstats_table = null
 		var datasets = {!! json_encode(array_values($datasets)) !!}
 
 		$(document).ready(function() {
@@ -204,17 +190,28 @@
 				dom: '<"toolbar prjtype"<"row">>rtip',
 				columns: [
 					{data: 'pubdate', visible: false},
+					// ⚠ `/projects/categories/…`, the live route. `/capital/categories/…`
+					// is a legacy path; the category page is where a project COUNT for
+					// this work belongs, because it is the one dimension the spine and
+					// the strategy share (138 vs 186 values, 128 in common).
+					// ⚠⚠ A CATEGORY THAT IS REALLY A FUNDING TYPE IS NOT LINKED, AND IS
+					// NOT PRINTED AS A CATEGORY. Two of the eight `capitalstrategy`
+					// vintages publish `City`/`Federal`/`State`/`Private` in the
+					// Ten-Year Plan Category column — 533 of 2,255 rows — and this cell
+					// linked them to `/projects/categories/city`, a page built from a
+					// funding type. Those rows keep their AMOUNTS (correct on 20250116)
+					// and lose only the label they do not have.
 					{data: function (r) {
-							return '<a href="/capital/categories/' + r['category-slug'] + '">' + r['category'] + '</a>'
+							var c = r['category']
+							if (['City','Federal','State','Private'].indexOf(c) !== -1)
+								return '<span class="db-muted">Not published</span>'
+							return '<a href="/projects/categories/' + r['category-slug'] + '">' + c + '</a>'
 						},
 						type: 'html'
 					},
 					{data: 'fundingsource'},
 					{data: function (r) { return toFin(r['year1amount'] * 1000) }, type: 'html'},
 					{data: function (r) { return toFin(r['year10total'] * 1000) }, type: 'html'},
-					{data: 'prjnum'},
-					{data: function (r) { return toFin(r['plannedcost'] * 1000) }, type: 'html'},
-					{data: function (r) { return toFin(r['currcost'] * 1000) }, type: 'html'},
                 ],
 
 				initComplete: function () {
@@ -552,27 +549,6 @@
 				}
 			});
 
-			dsstats_table = $('#dsStatsTable').DataTable({
-				data: datasets,
-				paging: false,
-				columns: [
-					{ title: "Name" },
-					{ title: "Section" },
-					{ title: "Description" },
-					{ title: "Last Updated" },
-					{ title: "Dataset Records" }
-				],
-				order: [],
-				dom: 'rtp',
-				initComplete: function () {
-					@foreach($datasets as $tbl=>$ds)
-						loadTableStat(
-							"{{ $tbl }}", 
-							"{!! str_replace('tblname', $tbl, $tblStatsUrl) !!}"
-						);
-					@endforeach
-				}
-			});
 
 		});
 
@@ -665,24 +641,6 @@
 		}
 
 		
-		function loadTableStat(dsName, url) {
-			dsstats_table = $('#dsStatsTable').DataTable();
-			fapireq(url, function (resp) {
-				if (resp['data'][0]['res']) {
-					$('#stats_'+dsName).text(resp['data'][0]['res'])
-					$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['res'])
-					$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
-				} else {
-					datasets.forEach(function (d, i) {
-						if (d[4].indexOf('stats_'+dsName) != -1) {
-							datasets.splice(i, 1)
-							dsstats_table.row(i).remove()
-							dsstats_table.draw();
-						}
-					})
-				}
-			})
-		}
 
 
 

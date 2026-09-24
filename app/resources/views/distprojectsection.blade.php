@@ -36,30 +36,9 @@
 
 <script>
 		var datasets = {!! json_encode(array_values($datasets)) !!}
-		var dsstats_table = null
-
-		function loadTableStat(dsName, url) {
-			var dsstats_table = $('#dsStatsTable').DataTable();
-			fapireq(url, function (resp) {
-				if (resp['data'][0]['res']) {
-					$('#stats_'+dsName).text(resp['data'][0]['res'])
-					$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['res'])
-					$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
-				} else {
-					datasets.forEach(function (d, i) {
-						if (d[4].indexOf('stats_'+dsName) != -1) {
-							datasets.splice(i, 1)
-							dsstats_table.row(i).remove()
-							dsstats_table.draw();
-						}
-					})
-				}
-			})
-		}
-
 		function details(d) {
 			return '<table cellpadding="5" cellspacing="0" border="0" style="padding-left:50px;">'+
-			  @foreach ((array)$details['details'] as $h=>$f)
+			  @foreach ((array)($details['details'] ?? []) as $h=>$f)
 				(d["{{ $f }}"] ? '<tr><td>{{ $h }}:</td><td>'+d["{{ $f }}"]+'</td></tr>' : '') +
 			  @endforeach
 			'</table>';
@@ -165,6 +144,17 @@
 							@endif
 						@endforeach
 
+						{{-- ⚠⚠ THE PUBLICATION-DATE FILTER BELONGS TO THE RETIRED SERIES.
+						     It hardcodes `columns([1])` and auto-selects that column's LAST
+						     option. Under `capitalprojectsdollarscomp` column 1 was
+						     `Publication Date`; on the spine it is `Agency`, so the control
+						     would build a dropdown of agency names, pick the last, and filter
+						     the table to one agency — the same defect that read
+						     "Showing 1 to 1 of 1 (filtered from 2,798)" on the ORG tab, which
+						     is why this one was gated before it could ship rather than after.
+						     ⚠ Gated on a contract flag, not deleted, so a dataset that really
+						     has a publication-date column can switch it back on. --}}
+						@if ($details['pubDateFilter'] ?? false)
 						/* custom pub_date filter on top-right */
 						this.api().columns([1]).every(function (c,a,i) {
 							var delim = {!! json_encode($details['fltDelim']) !!};
@@ -204,6 +194,7 @@
 							$('#filter-1 option:last-child').prop('selected',true).trigger('change')
 						}, 500);						
 						
+						@endif
 						setTimeout(function(){
 							initPopovers();
 						}, 1000);
@@ -219,27 +210,6 @@
 			});
 
 
-			dsstats_table = $('#dsStatsTable').DataTable({
-				data: datasets,
-				paging: false,
-				columns: [
-					{ title: "Name" },
-					{ title: "Section" },
-					{ title: "Description" },
-					{ title: "Last Updated" },
-					{ title: "Dataset Records" }
-				],
-				order: [],
-				dom: 'rtp',
-				initComplete: function () {
-					@foreach($datasets as $tbl=>$ds)
-						loadTableStat(
-							"{{ $tbl }}", 
-							"{!! str_replace('tblname', $tbl, $tblStatsUrl) !!}"
-						);
-					@endforeach
-				}
-			});
 
 
 			$('a.toggle-vis').on('click', function (e) {
@@ -285,21 +255,18 @@
 		
 		});
 		
+		// ⚠⚠ THE RETIRED-SERIES LOOP IS GONE, NOT LEFT INERT. The capital tiles are
+		// server-rendered from the spine now, so `$finStatUrls` is empty and this
+		// loop could never run — but it still NAMED `#over_budg_am`, `#orig_cost`
+		// and `#curr_cost` and still multiplied by 1000. Dead code that names the
+		// thing we removed is how a later reader concludes the tiles are still
+		// AJAX-hydrated from the retired series; the answer for dead code here is
+		// delete, not leave it unreachable.
+		// ⚠ It also read `$('#filter-1 option:selected')` — the publication-date
+		// control, which is gated off on the spine, so the value was about to
+		// become an agency name silently substituted into a URL.
+		// The function survives because its two callers rely on the popovers.
 		function loadFinStat() {
-			var uu = {!! json_encode($finStatUrls) !!}
-			var pubdate = $('#filter-1 option:selected').val() ? $('#filter-1 option:selected').val().replaceAll('-', '') : '20210805';
-			for (let sel in uu) {
-				//$.get(uu[sel].replace('pubdate', pubdate), function (resp) {
-				fapireq(uu[sel].replace('pubdate', pubdate), function (resp) {
-					var v = resp['data'][0]['res'] ?? '-'
-					if ((['#orig_cost', '#curr_cost', '#over_budg_am'].includes(sel)) && (v != '-')) {
-						$(sel).text(toFinShortK(v, 1000))
-						$(sel).attr('data-content', toFin(v, 1000))
-					}
-					else 
-						$(sel).text(v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","))
-				})
-			}
 			setTimeout(function(){
 				initPopovers();
 			}, 1000);
@@ -335,14 +302,68 @@
 	
 		<div id="stats_collapse" class="collapse show mt-2 mb-4">
 			<div class="db-stat-grid">
-				<div class="db-stat"><div class="db-stat-label">Number of Projects</div><div id="projects_no" class="db-stat-value prj_stat">&nbsp;</div></div>
-				<div class="db-stat"><div class="db-stat-label">Original Cost</div><div id="orig_cost" class="db-stat-value prj_stat">&nbsp;</div></div>
-				<div class="db-stat"><div class="db-stat-label">Current Cost</div><div id="curr_cost" class="db-stat-value prj_stat">&nbsp;</div></div>
-				<div class="db-stat"><div class="db-stat-label">Amount Over Budget</div><div id="over_budg_am" class="db-stat-value prj_stat">&nbsp;</div></div>
-				<div class="db-stat"><div class="db-stat-label">Running Long</div><div id="long_no" class="db-stat-value prj_stat">&nbsp;</div></div>
-				<div class="db-stat"><div class="db-stat-label">Over Budget</div><div id="over_budg_no" class="db-stat-value prj_stat">&nbsp;</div></div>
-				<div class="db-stat"><div class="db-stat-label">Starting Late</div><div id="late_start_no" class="db-stat-value prj_stat">&nbsp;</div></div>
-				<div class="db-stat"><div class="db-stat-label">Ending Late</div><div id="late_end_no" class="db-stat-value prj_stat">&nbsp;</div></div>
+				@php
+					// ⚠⚠ SERVER-RENDERED FROM THE SPINE. These eight tiles used to
+					// hydrate by AJAX from `/get/districts/pstats-*/…/pubdate` over
+					// `capitalprojectsdollarscomp`, multiplying by 1000 because that
+					// series is denominated in THOUSANDS.
+					// ⚠⚠ `Amount Over Budget` IS DELIBERATELY NOT REPRODUCED. It is the
+					// label this section documents as carrying TWO definitions — every
+					// row's budget difference globally, but only the NEGATIVE ones per
+					// district — so repointing it would preserve the defect under new
+					// data. The rebuilt Overview drops it and so does this.
+					$dCap   = is_array($capital ?? null) ? $capital : [];
+					$dCapOk = !empty($dCap['available']) && !empty($dCap['found']);
+					$dSched = $dCap['schedule'] ?? [];
+					$dMoney = [];
+					foreach (($dCap['money']['measures'] ?? []) as $dm)
+						$dMoney[$dm['key'] ?? ''] = $dm;
+					$dFmtN = function ($v) { return is_numeric($v) ? number_format((float) $v) : '—'; };
+					$dFmtB = function ($v) {
+						if (!is_numeric($v)) return '—';
+						$v = (float) $v;
+						if (abs($v) >= 1000000000) return '$' . number_format($v / 1000000000, 1) . 'B';
+						if (abs($v) >= 1000000) return '$' . number_format($v / 1000000, 1) . 'M';
+						return '$' . number_format($v);
+					};
+					// ⚠ Populations travel with the money, because no two of these
+					// measures are over the same set of projects.
+					$dPop = function ($k) use ($dMoney, $dFmtN) {
+						$n = $dMoney[$k]['population'] ?? null;
+						return is_numeric($n) ? $dFmtN($n) . ' projects' : null;
+					};
+					$dTracked = $dCap['projects'] ?? null;
+				@endphp
+				@if ($dCapOk)
+					<div class="db-stat">
+						<div class="db-stat-label">Projects in this district</div>
+						<div class="db-stat-value">{{ $dFmtN($dTracked) }}</div>
+					</div>
+					<div class="db-stat">
+						<div class="db-stat-label">In the current plan</div>
+						<div class="db-stat-value">{{ $dFmtN($dCap['in_current_plan'] ?? null) }}</div>
+						@if(is_numeric($dTracked))<div class="db-stat-sub">of {{ $dFmtN($dTracked) }} attributed here</div>@endif
+					</div>
+					<div class="db-stat">
+						<div class="db-stat-label">Planned commitments</div>
+						<div class="db-stat-value">{{ $dFmtB($dMoney['planned_usd']['value'] ?? null) }}</div>
+						@if($dPop('planned_usd'))<div class="db-stat-sub">{{ $dPop('planned_usd') }}</div>@endif
+					</div>
+					<div class="db-stat is-accent">
+						<div class="db-stat-label">Spent</div>
+						<div class="db-stat-value">{{ $dFmtB($dMoney['spent_usd']['value'] ?? null) }}</div>
+						@if($dPop('spent_usd'))<div class="db-stat-sub">{{ $dPop('spent_usd') }}</div>@endif
+					</div>
+					<div class="db-stat">
+						<div class="db-stat-label">With a published schedule</div>
+						<div class="db-stat-value">{{ $dFmtN($dSched['with_published_schedule'] ?? null) }}</div>
+						@if(is_numeric($dTracked))<div class="db-stat-sub">of {{ $dFmtN($dTracked) }} attributed here</div>@endif
+					</div>
+				@else
+					{{-- ⚠ A silently missing block reads as "this district has no capital
+					     programme". Zero is not failure, and failure is not zero. --}}
+					<div class="db-stat"><div class="db-stat-label">Capital programme</div><div class="db-stat-value">—</div><div class="db-stat-sub">figures not available right now</div></div>
+				@endif
 			</div>
 		</div>
 
@@ -384,23 +405,9 @@
 	
 	<div class="container">
 		<div class="row mb-4">
-			<div id="data_container_accordion" class="col-12 accordion">
-				<div class="accordion social_media" id="accordionThree">
-					<div>
-						<div id="headingThree">
-							<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-								We’re using normalized data from <span id="total_datasets"></span> datasets containing <span id="total_records"></span> records. Click here to learn more.
-							</button>
-						</div>
-						<div id="collapseThree" class="collapse hide" aria-labelledby="headingOne" data-parent="#accordionThree">
-							<div class="card-text table-responsive">
-								<table id="dsStatsTable" class="db-table display table-hover table-borderless" style="width:100%;">
-								</table>
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
+			{{-- One shell, from the shared provenance component. This markup was
+			     hand-rolled on fifteen views, each with its own per-page fetch. --}}
+			<x-db.data-provenance mode="page" :datasets="$datasets" id="distprojectsectionDs" />
 		</div>
 	</div>
 </div>

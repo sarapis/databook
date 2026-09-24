@@ -13,6 +13,13 @@
 
 @section('content')
 
+	{{-- ⚠ typeahead.bundle.js provides BOTH `Bloodhound` and `$.fn.typeahead`,
+	     and the address-search wiring below has always used both. It was never
+	     loaded here, so every page load threw `Bloodhound is not defined` and
+	     the rest of the ready handler after that line never ran. Same tag, same
+	     version, as the two sibling pages that share this wiring:
+	     projects.blade.php and districts.blade.php. --}}
+	<script src="https://typeahead.js.org/releases/latest/typeahead.bundle.js"></script>
 	<script type="text/javascript" language="javascript" src="https://cdn.datatables.net/buttons/1.6.5/js/dataTables.buttons.min.js"></script>
 	<script type="text/javascript" language="javascript" src="https://cdn.datatables.net/buttons/1.6.5/js/buttons.colVis.min.js"></script>
 	<link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/buttons/1.6.5/css/buttons.dataTables.min.css"/>
@@ -23,7 +30,32 @@
 		var dataurl = '{!! $url !!}'
 		var datasets = {!! json_encode(array_values($datasets)) !!}
 		var tblStatsUrls = {!! json_encode($tblStatsUrls) !!}
-		var dsstats_table = null
+		// ⚠⚠ THE TABLE'S FETCH AND THE MAP'S STYLE LOAD ARE A RACE.
+		// `projectsMapInit()` adds the `route` source inside mapbox's `load`
+		// event; `drawProjects()` calls `projectsMapDrawFeatures`, which does
+		// `map.getSource('route').setData`. The DataTable's `draw` event fires as
+		// soon as its AJAX lands, and that regularly beats the style -- measured
+		// headless, it beat it on EVERY run, with and without an artificial style
+		// delay. `getSource('route')` is then undefined, `setData` throws inside
+		// the draw handler, and the map stays empty for ever with 40 schools
+		// loaded in the table beside it.
+		//
+		// Same defect and same fix as /projects (CAP_PENDING_FEATURES) and
+		// /p/{id} (PRJ_PENDING): hold whatever arrives first, draw when BOTH are
+		// ready. ⚠ Unlike those two, `drawProjects` fires again on every redraw
+		// -- pagination, a filter, a sort -- so this must keep working after the
+		// map is ready, not just once.
+		var SCH_PENDING_FEATURES = null;
+		var SCH_MAP_READY = false;
+
+		function schDrawWhenReady(features) {
+			if (features) SCH_PENDING_FEATURES = features;
+			if (!SCH_MAP_READY || SCH_PENDING_FEATURES === null) return;
+			var ff = SCH_PENDING_FEATURES;
+			SCH_PENDING_FEATURES = null;
+			projectsMapDrawFeatures(ff);
+			window.SCH_MAP_FEATURES = ff.length;
+		}
 
 
 
@@ -104,27 +136,27 @@
 		}
 
 
-		function loadTableStat(dsName, url) {
-			dsstats_table = $('#dsStatsTable').DataTable();
-			fapireq(url, function (resp) {
-				if (resp['data'][0]['res']) {
-					$('#stats_'+dsName).text(resp['data'][0]['res'])
-					$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['res'])
-					$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
-				} else {
-					datasets.forEach(function (d, i) {
-						if (d[4].indexOf('stats_'+dsName) != -1) {
-							datasets.splice(i, 1)
-							dsstats_table.row(i).remove()
-							dsstats_table.draw();
-						}
-					})
-				}
-			})
-		}
 
 
 		$(document).ready(function() {
+			// Boundary overlay control (.db-map-control) — open/close, aria sync,
+			// outside-click close. Same behaviour as /districts and /projects.
+			var boundariesControl = document.getElementById('boundaries-control');
+			var boundariesToggle = document.getElementById('boundaries-toggle');
+			if (boundariesControl && boundariesToggle) {
+				boundariesToggle.addEventListener('click', function (e) {
+					e.stopPropagation();
+					var open = boundariesControl.classList.toggle('is-open');
+					boundariesToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+				});
+				document.addEventListener('click', function (e) {
+					if (!e.target.closest || !e.target.closest('#boundaries-control')) {
+						boundariesControl.classList.remove('is-open');
+						boundariesToggle.setAttribute('aria-expanded', 'false');
+					}
+				});
+			}
+
 
 			datatable = $('#myTable').DataTable({
 				ajax: function (url, cb) {
@@ -294,41 +326,24 @@
 			};
 
 			@if($sdStatsUrl ?? null)
+				{{-- ⚠ `schoolStatTiles` (script.js) owns the read, because this
+				     block was duplicated verbatim in distsection.blade.php and both
+				     copies dereferenced `resp.data[0]` unguarded. --}}
 				fapireq('{!! $sdStatsUrl !!}', function (resp) {
-					$('#schools_no').text(commaThousands(resp.data[0].schools_no))
-					$('#students_no').text(commaThousands(resp.data[0].students_no))
-					$('#prj_no').text(commaThousands(resp.data[0].prj_no))
-					$('#prj_budget').text(toFinShortK(resp.data[0].prj_budget))
-					$('#prj_costs').text(toFinShortK(resp.data[0].prj_costs))
-					$('#pcosts_per_student').text(toFinShortK(resp.data[0].pcosts_per_student))
+					schoolStatTiles(resp, 'schoolStatsNote')
 				})
 			@endif
 
-			dsstats_table = $('#dsStatsTable').DataTable({
-				data: datasets,
-				paging: false,
-				columns: [
-					{ title: "Name" },
-					{ title: "Section" },
-					{ title: "Description" },
-					{ title: "Last Updated" },
-					{ title: "Dataset Records" }
-				],
-				order: [],
-				dom: 'rtp',
-				initComplete: function () {
-					@foreach($tblStatsUrls as $tbl=>$statsUrl)
-						loadTableStat(
-							"{{ $tbl }}",
-							"{!! $statsUrl !!}"
-						);
-					@endforeach
-				}
-			});
 
 
 			// Initialize Map
 			projectsMapInit();
+			// `load` may already have fired by the time this binds; `loaded()`
+			// covers that, and mapbox no-ops a late `on('load')` handler.
+			if (typeof map !== 'undefined') {
+				if (map.loaded && map.loaded()) { SCH_MAP_READY = true; schDrawWhenReady(null); }
+				map.on('load', function () { SCH_MAP_READY = true; schDrawWhenReady(null); });
+			}
 			
 			// Initialize District Switch
 			setTimeout(function(){
@@ -434,7 +449,7 @@
 					}
 				}
 			});
-			projectsMapDrawFeatures(features);
+			schDrawWhenReady(features);
 		}
 
 
@@ -520,6 +535,14 @@
 
 				</div>
 
+				{{-- ⚠ A FAILED STATS REQUEST IS NOT AN EMPTY CITY. Written by
+				     `schoolStatTiles`; hidden while the figures are fine. --}}
+				<div class="row justify-content-center">
+					<div class="col-md-12">
+						<p id="schoolStatsNote" class="text-center text-muted small mb-0" style="display:none;"></p>
+					</div>
+				</div>
+
 			</div>
 
 
@@ -527,57 +550,53 @@
 				<div id="map_container" class="col-12 mb-0 position-relative" style="min-height:540px!important;">
 					<div id="map" class="map flex-fill d-flex" style="width:100%;height:100%;"></div>
 					
-					<!-- In-Map Toggle Button -->
-					<button id="mapFilterToggle" class="map-filter-toggle-btn" type="button" onclick="toggleMapFilterPanel()">
-						<i class="bi bi-funnel me-1"></i> Filters & Layers
-					</button>
-					
-					<!-- In-Map Filter Panel -->
-					<div id="mapFilterPanel" class="map-filter-panel" style="display: none;">
-						<div class="map-filter-header">
-							<h6 class="mb-0"><i class="bi bi-funnel me-2"></i>Filters & Layers</h6>
-							<button type="button" class="btn-close btn-close-white btn-sm" onclick="toggleMapFilterPanel()"></button>
-						</div>
-						<div class="map-filter-body">
-							<!-- Search Section -->
-							<div class="mb-3">
-								<div class="filter-section-title"><i class="bi bi-search me-1"></i> Search</div>
-								<div class="input-group input-group-sm flex-nowrap mb-2">
-									<span class="input-group-text"><i class="bi bi-geo-alt"></i></span>
-									<input id="addrSearch" type="text" class="form-control" placeholder="Search by address..." onkeydown="addrSearchKeyPress(this)" autocomplete="off">
-									<button class="btn btn-outline-light" type="button" id="addrSearchBtn" onclick="addrSearch();"><i class="bi bi-arrow-right"></i></button>
-								</div>
-								{{--
-								<div class="input-group input-group-sm flex-nowrap">
-									<span class="input-group-text"><i class="bi bi-hash"></i></span>
-									<input id="idSearch" type="text" class="form-control" placeholder="Search by project ID..." onkeydown="idSearchKeyPress(this)" autocomplete="off">
-									<button class="btn btn-outline-light" type="button" id="idSearchBtn" onclick="idSearch();"><i class="bi bi-arrow-right"></i></button>
-								</div>
-								--}}
-							</div>
-							
-							<hr class="my-2">
-							
-							<!-- District Boundaries -->
-							<div class="mb-2">
-								<div class="filter-section-title"><i class="bi bi-map me-1"></i> District Boundaries</div>
-								<div class="filter-options-list">
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="cd-switch"><label class="form-check-label small" for="cd-switch">Community Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="ed-switch"><label class="form-check-label small" for="ed-switch">Election Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="pp-switch"><label class="form-check-label small" for="pp-switch">Police Precincts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="dsny-switch"><label class="form-check-label small" for="dsny-switch">Sanitation Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="fb-switch"><label class="form-check-label small" for="fb-switch">Fire Battalion</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="sd-switch"><label class="form-check-label small" for="sd-switch">School Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="hc-switch"><label class="form-check-label small" for="hc-switch">Health Center Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="cc-switch"><label class="form-check-label small" for="cc-switch">City Council Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="nycongress-switch"><label class="form-check-label small" for="nycongress-switch">Congressional Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="sa-switch"><label class="form-check-label small" for="sa-switch">State Assembly Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="ss-switch"><label class="form-check-label small" for="ss-switch">State Senate Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="bid-switch"><label class="form-check-label small" for="bid-switch">Business Improvement Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="nta-switch"><label class="form-check-label small" for="nta-switch">Neighborhood Tabulation Areas</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="zipcode-switch"><label class="form-check-label small" for="zipcode-switch">Zip Codes</label></div>
-								</div>
-							</div>
+					{{-- Address search, top-left — the same overlay pattern /districts
+					     and /projects use, replacing the combined "Search & Layers" flyout. --}}
+					<div class="db-map-search" style="top: var(--db-space-2); left: var(--db-space-2);">
+						<i class="bi bi-search"></i>
+						<input id="addrSearch" type="text" placeholder="Search an address…" aria-label="Enter address to find schools" onkeydown="addrSearchKeyPress(this)" autocomplete="off">
+						<button class="db-map-search-go" id="addrSearchBtn" type="button" onclick="addrSearch();" data-bs-toggle="popover" data-content="" data-placement="bottom" data-trigger="manual" aria-label="Search address"><i class="bi bi-arrow-right"></i></button>
+					</div>
+
+					{{-- Boundary overlays, top-right.
+					     ⚠ THE SWITCH IDS ARE LOAD-BEARING AND UNCHANGED — `script.js` binds
+					     each layer by ID, so a renamed control still looks right while
+					     toggling nothing.
+					     ⚠ The `<hr>` per row is the layer's colour key, painted by
+					     `$('label[for="…-switch"] hr').attr('style', 'background-color: …')`.
+					     The old panel had none, so this page showed boundary toggles with no
+					     colour swatches at all. --}}
+					<div class="db-map-control" id="boundaries-control" style="top: var(--db-space-2); right: var(--db-space-2);">
+						<button type="button" class="db-btn db-btn-outline db-btn-sm" id="boundaries-toggle" aria-haspopup="true" aria-expanded="false" style="background:#fff;">
+							<i class="bi bi-bounding-box-circles"></i> Show District Boundaries <i class="bi bi-chevron-down db-caret"></i>
+						</button>
+						<div class="db-map-control-menu" id="boundaries_controls">
+							<p class="db-map-control-label">Overlay boundaries</p>
+							@php
+								$boundaryLayers = [
+									'cd' => 'Community Districts',
+									'ed' => 'Election Districts',
+									'pp' => 'Police Precincts',
+									'dsny' => 'Sanitation Districts',
+									'fb' => 'Fire Battalions',
+									'sd' => 'School Districts',
+									'hc' => 'Health Center Districts',
+									'cc' => 'City Council Districts',
+									'nycongress' => 'Congressional Districts',
+									'sa' => 'State Assembly Districts',
+									'ss' => 'State Senate Districts',
+									'bid' => 'Business Improvement Districts',
+									'nta' => 'Neighborhood Tabulation Areas',
+									'zipcode' => 'Zip Code',
+								];
+							@endphp
+							@foreach ($boundaryLayers as $code => $label)
+								<label class="db-map-control-row" for="{{ $code }}-switch">
+									<input type="checkbox" id="{{ $code }}-switch">
+									<span>{{ $label }}</span>
+									<hr class="border-sample db-map-swatch">
+								</label>
+							@endforeach
 						</div>
 					</div>
 				</div>
@@ -610,24 +629,9 @@
 
 		<div class="container">
 				<div class="row my-4">
-					<div id="data_container_accordion" class="col-12 accordion">
-
-						<div class="accordion social_media" id="accordionThree">
-							<div>
-								<div id="headingThree">
-									<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-										We’re using normalized data from <span id="total_datasets"></span> datasets containing <span id="total_records"></span> records. Click here to learn more.
-									</button>
-								</div>
-								<div id="collapseThree" class="collapse hide" aria-labelledby="headingOne" data-parent="#accordionThree">
-									<div class="card-text table-responsive">
-										<table id="dsStatsTable" class="display table-hover table-borderless" style="width:100%;">
-										</table>
-									</div>
-								</div>
-							</div>
-						</div>
-					</div>
+					{{-- One shell, from the shared provenance component. This markup was
+					     hand-rolled on fifteen views, each with its own per-page fetch. --}}
+					<x-db.data-provenance mode="page" :datasets="$datasets" id="schoolsDs" />
 				</div>
 		</div>
 

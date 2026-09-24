@@ -1,0 +1,50 @@
+"contract_id","kind","program","note"
+# ⚠⚠ MEMBERSHIP OF THE CALL-CENTER LENS IS A LOOKUP, NOT A PATTERN — and this
+# file exists because the patterns FAILED, three times in one sitting
+# (2026-09-15), each time producing a confident wrong total:
+#   `311`   matched PW311S20A (geotechnical) and 931110V (a youth contract)
+#   `988`   matched "Shelter for Homeless Single Adults 988 Myrtle Ave"
+#   `crisis` matched crisis SHELTERS and DYCD's Crisis Management System, a
+#           youth violence-prevention programme with no phone line in it
+# The first total those produced was $369.3M. The measured figure is $247.8M.
+# A curated list of ~20 contracts is cheaper than a pattern that is wrong by
+# half and reads as a measurement. Same argument as license_family_curated.csv.
+#
+# ⚠ `kind` is what the CONTRACT BUYS, which is the whole point of the lens:
+#   contact-center          the contact-center function itself — operations,
+#                           platform, routing, staffing of the channel
+#   clinical-or-counseling  care or counselling delivered BY phone
+#   benefits-information    help accessing benefits or services, by phone
+#   interpretation          language services delivered by phone
+#
+# ⚠ WHETHER A ROW IS INSIDE THE TECHNOLOGY UNIVERSE IS **NOT** RECORDED HERE.
+# It is read live from digital_contract_enrichment.tech_relevant, so this seed
+# cannot drift from the classification it is describing — and so that the lens
+# reports the boundary rather than asserting it.
+# ⚠⚠ `program` IS THE UNIT A READER ACTUALLY ASKS ABOUT, and grouping by it is
+# what found the missing NYC Well successor above. ⚠ It is NOT the vendor: Safe
+# Horizon holds 107 contracts worth $441.3M and The Mental Health Association 34
+# worth $315.1M, almost none of which are phone lines — attributing a vendor's
+# whole book to one programme is the error this column exists to avoid.
+"CT1-858-20228804900","contact-center","NYC 311","NYC 311 call center operations, renewal #1. The City's own information channel; the contract buys the staffed channel."
+"CT1-858-20248806246","contact-center","NYC 311","NYC 311 call center operations, renewal #2. Sibling of the above — $60.2M across the pair, two thirds of everything inside the universe here."
+"CT1-069-20228803539","contact-center","DSS One Number Call Center","DSS 'One Number Call Center Solution' — a contact-center platform consolidating access numbers."
+"CT1-069-20268801165","contact-center","DSS contact center platform","Staff augmentation for DSS's Avaya contact center. Platform operations."
+"CT1-827-20228800294","contact-center","DSNY curbside composting line","DSNY opt-in curbside composting call center and communications."
+"CT1-816-20228800223","clinical-or-counseling","NYC Well / 988","NYC Well — 24/7 clinical crisis intervention delivered by licensed staff. The LARGEST row in this lens and it is outside the technology universe; excluded by hand 2026-08-12 on the reasoning that a service delivered through technology is not a technology purchase."
+"CT1-816-20248802771","clinical-or-counseling","DOHMH nurse triage line","DOHMH nurse triage telephone line. Excluded by hand 2026-09-15; the classifier's own rationale reads 'a human-staffed call center service, not a software product'."
+"CT1-069-20258801650","clinical-or-counseling","Safe Horizon hotlines","Safe Horizon hotline services for victims of domestic violence."
+"CT1-002-20248801248","clinical-or-counseling","Safe Horizon hotlines","Safe Horizon hotlines, FY24, via the Office of Criminal Justice."
+"CT1-002-20201402840","clinical-or-counseling","Safe Horizon hotlines","Safe Horizon hotlines, ACCO extension."
+"CT1-002-20238805866","clinical-or-counseling","Safe Horizon hotlines","Safe Horizon hotlines, FY23."
+"CT1-040-20248804674","clinical-or-counseling","UFT BRAVE student helpline","UFT BRAVE hotline, FY23 discretionary award — the student anti-bullying helpline. ⚠⚠ THIS ONE IS INSIDE THE TECHNOLOGY UNIVERSE AND ITS TWO SIBLINGS ARE NOT. Same programme, same vendor, classified both ways. It is the clearest single illustration of why this lens exists."
+"CT1-040-20238805183","clinical-or-counseling","UFT BRAVE student helpline","UFT BRAVE hotline, FY21 discretionary contract. Sibling of the row above; classified NON-tech."
+"CT1-040-20228806510","clinical-or-counseling","UFT BRAVE student helpline","UFT BRAVE hotline, FY21 discretionary contract. Second non-tech sibling."
+"CT1-069-20258804589","benefits-information","NYC Benefits access line","NYC Benefits and child-care supplement access line (University Behavioral Associates)."
+"CT1-069-20258804578","benefits-information","NYC Benefits access line","NY Benefits call center and child care (Community Service Society)."
+"CT1-069-20258804575","benefits-information","NYC Benefits access line","NYC Benefits Program call center (BronxWorks)."
+"CT1-801-20258801660","benefits-information","SBS small-business hotline","Staffing for the SBS small-business hotline."
+"CT1-801-20228803329","benefits-information","SBS small-business hotline","Temporary services for the SBS hotline. Sibling of the row above."
+"CT1-069-20241401187","benefits-information","NYC Court Helpline","NYC Court Helpline telephone service, via the State Unified Court System."
+"CT1-858-20248806540","interpretation","NYC 311","Language translation services for the 311 contact center. ⚠ Language services delivered INTO a contact center — related to interpretation spending recorded separately in the section plan, which is deliberately NOT folded in here: interpreter hours are not a contact-center purchase."
+"CT1-816-20258800203","clinical-or-counseling","NYC Well / 988","⚠⚠ FOUND BY ASKING THE PROGRAMME QUESTION, NOT BY THE PATTERN — and it is the gap this file was supposed to prevent. NYC Well's SUCCESSOR contract, 2024-07-01 to 2027-06-30, immediately following CT1-816-20228800223 (2021-07-01 to 2024-06-30) at the same agency with the same vendor and within $0.21M of the same value. Its title is 'FY25 RQM THE MENTAL HEALTH ASSOCIATION ... 81624M0015020' and says nothing about a phone line, so no title pattern could ever have proposed it and a list CURATED FROM a pattern's output inherits that blind spot. The 2026-08-12 review had already identified it independently as 'the same Mental Health Association crisis-line relationship'. Adding it takes NYC Well from $105.55M to $210.89M and the whole lens from $247.78M to $353.12M."

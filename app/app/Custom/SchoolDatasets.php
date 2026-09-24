@@ -40,6 +40,35 @@ class SchoolDatasets
 			'DBNkey' => 'system_code',		// system_code for datasets related to schools by DBN like 26Q495, location_code - by location code Q495
 		],
 
+		'graduation' => [					// mjm3-8dw8 — docs/GRADUATION-INGEST-PLAN.md
+			'fullname' => 'Graduation Results, Cohorts 2012-2019',
+			'table' => 'graduationoutcomes',
+			'description' => 'Graduation, Regents and dropout outcomes by cohort. Cohorts 2012-2019 are the graduating classes of 2016-2023; a cohort is labelled by the year students entered 9th grade.',
+			'hdrs' => ['Cohort Year', 'Cohort', 'Category', '# Total Cohort', '# Grads', '% Grads', '# Advanced Regents', '% Advanced Regents of Cohort', '# Dropout', '% Dropout'],
+			'visible' => [true, true, true, true, true, true, true, true, true, true],
+			'flds' => ['"Cohort Year"', '"Cohort"', '"Category"',
+				'function (r) { return commaThousands( r["# Total Cohort"] ); }',
+				'function (r) { return commaThousands( r["# Grads"] ); }',
+				'"% Grads"',
+				'function (r) { return commaThousands( r["# Advanced Regents"] ); }',
+				'"% Advanced Regents of Cohort"',
+				'function (r) { return commaThousands( r["# Dropout"] ); }',
+				'"% Dropout"'],
+			// ⚠ Defaulted, NOT filtered at source: the endpoint returns every
+			// cohort definition and every demographic breakdown (avg 587 rows
+			// per school, max 686), and the reader can clear these to reach
+			// them. '4 year June' is NYC's headline on-time measure.
+			'filters' => [1 => null, 2 => null],
+			'fltPreselect' => [1 => '4 year June', 2 => 'All Students'],
+			// ⚠ Only ~497 of 2,131 schools have a graduating cohort. For the rest
+			// this is not missing data — it is a school with no 12th grade.
+			'emptyText' => '<div class="db-empty"><div class="db-empty-icon"><i class="bi bi-mortarboard"></i></div><div class="db-empty-title">No graduating cohort</div><div class="db-empty-text">The City publishes graduation outcomes for high schools. This school has no cohort in that data.</div></div>',
+			'details' => [],
+			'sort' => ['Cohort Year', 'Category'],
+			// DBN, because "Geographic Subdivision" holds a DBN at School grain.
+			'DBNkey' => 'system_code',
+		],
+
 		'enrollment' => [					// 253
 			'fullname' => '2017-18 - 2021-22 Demographic Snapshot',
 			'table' => 'demographics',
@@ -218,6 +247,7 @@ class SchoolDatasets
 	public $list = [
 		'schools' => 'Schools',
 		'attendance' => 'Attendance',
+		'graduation' => 'Graduation',
 		'enrollment' => 'Enrollment',
 		'building-enrollment-capacity' => 'Building',
 		'organization-enrollment-capacity' => 'Organization',
@@ -238,6 +268,7 @@ class SchoolDatasets
 	public $menu = [
 		'enrollment',
 		'attendance',
+		'graduation',
 		'Capacity' =>
 			[
 				'building-enrollment-capacity',
@@ -289,10 +320,21 @@ class SchoolDatasets
 		$dd['fltDelim'] = $fltDel;
 
 		$dd['fltsCols'] = implode(',', array_keys($dd['filters']));
+		// ⚠⚠ PRESELECTS COME FROM AN EXPLICIT `fltPreselect`, NEVER FROM A NON-NULL
+		// VALUE IN `filters`. This derived them from `filters` when it shipped, which
+		// was inert HERE (all 15 other school sections declare null) and would NOT
+		// have been in DistDatasets, where `requests` carries a dormant
+		// `0 => '2020-07-01'` — deriving there would have pinned the live Requests
+		// page to one Publication Date. One mechanism, opted into visibly, in both.
+		$pre = [];
+		foreach ((array)($dd['fltPreselect'] ?? []) as $i=>$v)
+			$pre[$i + $inc] = $v;
+		$dd['fltDefaults'] = (object)$pre;
 		return $dd;
 	}
 	
-	public function stats_data_sources($dd, $school, $all=false)
+	// ⚠ `$counts` LAST and optional — this signature differs again.
+	public function stats_data_sources($dd, $school, $all=false, $counts=null)
 	{
 		$rr = $uu = $ii = [];
 		
@@ -318,7 +360,7 @@ class SchoolDatasets
 							'<a href="' . route('schoolSection', ['code' => $school['location_code'], 'slug' => Str::slug($school['location_name'], '-'), 'section' => $m]) . "\">{$this->list[$m]}</a>",
 							$this->dd[$m]['description'] ?? $ii[$tbl]['Descripton'],
 							$ii[$tbl]['Last Updated'],
-							'<span id="stats_' . str_replace('/', '_', $tbl) . '"></span>',
+							\App\Custom\ProjectsDatasets::countCell(str_replace('/', '_', $tbl), $counts),
 						];
 					} else {
 						// Fallback when school data is missing
@@ -327,7 +369,7 @@ class SchoolDatasets
 							$this->list[$m] ?? ucwords(str_replace('-', ' ', $m)),
 							$this->dd[$m]['description'] ?? $ii[$tbl]['Descripton'],
 							$ii[$tbl]['Last Updated'],
-							'<span id="stats_' . str_replace('/', '_', $tbl) . '"></span>',
+							\App\Custom\ProjectsDatasets::countCell(str_replace('/', '_', $tbl), $counts),
 						];
 					}
 				} else {
@@ -338,7 +380,7 @@ class SchoolDatasets
 							'<a href="' . route('schoolSection', ['code' => $school['location_code'], 'slug' => Str::slug($school['location_name'], '-'), 'section' => $m]) . "\">{$this->list[$m]}</a>",
 							$this->dd[$m]['description'] ?? "No description available",
 							"N/A",
-							'<span id="stats_' . str_replace('/', '_', $tbl) . '"></span>',
+							\App\Custom\ProjectsDatasets::countCell(str_replace('/', '_', $tbl), $counts),
 						];
 					} else {
 						$rr[$tbl] = [
@@ -346,7 +388,7 @@ class SchoolDatasets
 							$this->list[$m] ?? ucwords(str_replace('-', ' ', $m)),
 							$this->dd[$m]['description'] ?? "No description available",
 							"N/A",
-							'<span id="stats_' . str_replace('/', '_', $tbl) . '"></span>',
+							\App\Custom\ProjectsDatasets::countCell(str_replace('/', '_', $tbl), $counts),
 						];
 					}
 				}

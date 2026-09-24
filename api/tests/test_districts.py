@@ -102,7 +102,7 @@ async def test_district_fallback_to_f_param(client):
     """Tables not in DISTRICT_COLUMNS should fall back to the `f` query param."""
     with patch("main.select", new_callable=AsyncMock, return_value=MOCK_ROWS) as mock_sel:
         resp = await client.get(
-            "/get/districts/cd/101/sometable",
+            "/get/districts/cd/101/demographics",
             params={"f": "my_column", "sort": "col1,col2"}
         )
 
@@ -114,12 +114,21 @@ async def test_district_fallback_to_f_param(client):
 @pytest.mark.asyncio
 async def test_district_no_mapping_no_f_returns_error(client):
     """Tables not in DISTRICT_COLUMNS and no `f` should return empty rows with error."""
-    resp = await client.get("/get/districts/cd/101/unknowntable")
+    resp = await client.get("/get/districts/cd/101/demographics")
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["rows"] == []
     assert "error" in data
+
+
+@pytest.mark.asyncio
+async def test_district_table_outside_the_allowlist_is_404(client):
+    """`tbl` is the FROM relation; a table the frontend does not serve never
+    reaches SQL (see test_sql_injection.py)."""
+    with patch("main.select", new_callable=AsyncMock, return_value=MOCK_ROWS) as mock_sel:
+        resp = await client.get("/get/districts/cd/101/unknowntable", params={"f": "x"})
+    assert resp.status_code == 404 and not mock_sel.called
 
 
 @pytest.mark.asyncio

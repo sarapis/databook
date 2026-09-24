@@ -77,6 +77,22 @@ CREATE TABLE IF NOT EXISTS nycha_vendor_crosswalk (
     curated_note          text
 );
 ALTER TABLE nycha_vendor_crosswalk ADD COLUMN IF NOT EXISTS match_score double precision;
+-- ⚠⚠ ADDED 2026-08-28 TO MAKE THIS TABLE SAFE BY CONSTRUCTION.
+-- Until now an unreviewed `fuzzy-review` match was written straight into
+-- `passport_supplier_id` — the column every consumer joins on — so nothing but a
+-- tier filter stood between a guess and a published claim. Measured:
+-- `routers/oce.py`'s vendor-profile reverse lookup does
+--     SELECT ... WHERE passport_supplier_id = $1
+-- with NO tier filter, so a held candidate would have published as NYCHA activity
+-- on a public vendor profile. #146 is exactly one missed filter.
+-- `org_vendor_crosswalk` was written later and avoids this by holding candidates
+-- in `candidate_supplier_id` with the link column NULL, so a join CANNOT go
+-- wrong. This brings NYCHA to that standard.
+ALTER TABLE nycha_vendor_crosswalk ADD COLUMN IF NOT EXISTS candidate_supplier_id text;
+-- Migrate any already-stored held candidate out of the live column.
+UPDATE nycha_vendor_crosswalk
+   SET candidate_supplier_id = passport_supplier_id, passport_supplier_id = NULL
+ WHERE confidence = 'fuzzy-review' AND passport_supplier_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_nycha_xwalk_passport ON nycha_vendor_crosswalk (passport_supplier_id);
 """
 
@@ -198,15 +214,38 @@ def _load_curated() -> list:
     """Curated seed CSV — rows of nycha_vendor_name,passport_supplier_id[,note],
     where passport_supplier_id may be a _NO_MATCH marker (e.g. "-") to record a
     reviewed rejection. Path: env NYCHA_CURATED_XWALK_CSV, else
-    <DATA>/nycha_curated_xwalk.csv (so the weekly auto-refresh picks it up with no
-    env plumbing). Returns [(name, id_or_None, note)]; [] if absent."""
-    path = os.environ.get("NYCHA_CURATED_XWALK_CSV") or f"{DATA}/nycha_curated_xwalk.csv"
+    api/seed/nycha_curated_xwalk.csv — version-controlled, so the weekly refresh
+    picks it up with no env plumbing AND the decisions survive a rebuild.
+    Returns [(name, id_or_None, note)]; [] if absent."""
+    # ⚠⚠ DEFAULTS TO THE VERSION-CONTROLLED SEED, NOT $DATA — changed 2026-08-28.
+    # It defaulted to `{DATA}/nycha_curated_xwalk.csv`, i.e. a file on the prod
+    # box, so **213 reviewed decisions existed in exactly one place** and would
+    # not have survived a rebuild of that volume. CLAUDE.md carried it as a known
+    # defect for a month. build_org_vendor_crosswalk.py was written later and
+    # deliberately defaults to its seed for this exact reason; this now matches.
+    # The env var still overrides, for a scratch file.
+    # ⚠ The $DATA copy is READ AS A FALLBACK and is deliberately not deleted: if
+    # anyone reviews on the box before this lands everywhere, their decisions are
+    # still picked up rather than silently dropped.
+    seed = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "seed", "nycha_curated_xwalk.csv")
+    path = (os.environ.get("NYCHA_CURATED_XWALK_CSV")
+            or (seed if os.path.exists(seed) else f"{DATA}/nycha_curated_xwalk.csv"))
     if not os.path.exists(path):
         return []
     out = []
     with open(path, newline="", encoding="utf-8") as fh:
         for row in csv.reader(fh):
             if not row or not row[0].strip():
+                continue
+            # ⚠⚠ COMMENT LINES, ADDED 2026-08-28 — AND THIS WAS A LIVE BUG THE
+            # MOMENT THE FILE MOVED INTO GIT. This parser never skipped `#`, so
+            # the seed's explanatory header was read as a VENDOR NAME with a NULL
+            # id, i.e. a curated NO-MATCH for a row of prose. Every other seed in
+            # api/seed/ carries a comment header, so a file moved into that
+            # directory acquires one — and the parser has to expect it. Caught by
+            # a test failing on `[('# NYCHA ve...', None), ...]`.
+            if row[0].lstrip().startswith("#"):
                 continue
             if row[0].strip().lower() in ("nycha_vendor_name", "name"):  # header
                 continue
@@ -320,11 +359,17 @@ async def main():
         # from the parquet below. Same guards.
         await conn.executemany(
             """INSERT INTO nycha_vendor_crosswalk
-                 (nycha_vendor_name, passport_supplier_id, passport_vendor_name,
+                 (nycha_vendor_name, passport_supplier_id, candidate_supplier_id,
+                  passport_vendor_name,
                   confidence, match_source, match_score, derived_at)
-               VALUES ($1, $2, $3, 'fuzzy-review', 'fuzzy-token-ratio', $4, now())
+               VALUES ($1, NULL, $2, $3, 'fuzzy-review', 'fuzzy-token-ratio', $4, now())
                ON CONFLICT (nycha_vendor_name) DO UPDATE SET
-                 passport_supplier_id = EXCLUDED.passport_supplier_id,
+                 -- ⚠ BOTH columns must move together. Setting the link column to
+                 -- NULL without recording the candidate would lose the proposal
+                 -- and leave the reviewer nothing to judge; setting the candidate
+                 -- without nulling the link would leave the guess published.
+                 passport_supplier_id = NULL,
+                 candidate_supplier_id = EXCLUDED.candidate_supplier_id,
                  passport_vendor_name = EXCLUDED.passport_vendor_name,
                  confidence = 'fuzzy-review', match_source = 'fuzzy-token-ratio',
                  match_score = EXCLUDED.match_score, derived_at = now()

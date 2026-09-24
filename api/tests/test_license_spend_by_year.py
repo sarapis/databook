@@ -337,7 +337,10 @@ def test_the_page_explains_the_gap_as_master_agreements_not_a_matching_failure()
     assert 'not under the agreement' in view, \
         "the page no longer says where the missing spending actually is"
     # Same discipline as the floor sentence: no typed money in the explanation.
-    para = view.split('Why the two do not reconcile')[1][:2000]
+    # To the end of the paragraph, never a fixed width: a 2000-char window ran
+    # into an unrelated COMMENT's figures once the section below it moved away.
+    para = view.split('Why the two do not reconcile')[1]
+    para = para[:para.index('</p>')]
     assert not re.search(r'\$\s?\d[\d,.]*\s?[MB]\b', para), \
         "a money figure is typed into the reconciliation sentence — serve it instead"
 

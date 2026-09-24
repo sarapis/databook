@@ -23,6 +23,19 @@ import asyncpg
 
 from config import Config
 
+# ⚠⚠ RAISE THE CSV FIELD LIMIT, or a single large cell kills the whole ingest.
+# Python's csv module caps a field at 131,072 bytes. NYC's CPDB geometry exports
+# carry a MultiPolygon as WKT in one cell and exceed that, so
+# `cpdb_geometry_polygons` failed with "field larger than field limit (131072)"
+# — measured 2026-09-05, after the points set (2,776 rows) had ingested fine.
+# ⚠ The failure is RECORDED (dataset_registry.last_error) rather than silent,
+# which is the only reason it was visible; the run still reported "Full replace"
+# on the line before. Read the row count, not the log line.
+# ⚠ Bounded rather than sys.maxsize: on a 64-bit platform maxsize overflows the
+# C long the module casts to, raising OverflowError. 256 MB is far above any
+# real cell and still a limit.
+csv.field_size_limit(256 * 1024 * 1024)
+
 # ⚠ getLogger ONLY — never basicConfig here. modules/applog.py owns the api's
 # logging configuration, and a second config in a module the api imports would
 # double every line in prod (#249). This module is not under `routers.*` or
@@ -61,7 +74,14 @@ from enrich_vendor import derive_vendor_enrichment_hook
 from enrich_doing_business import derive_doing_business_hook
 from build_org_vendor_crosswalk import derive_org_vendor_hook
 from build_notice_product_links import derive_notice_product_links_hook
+from build_program_groups import derive_program_groups_hook
+from build_capital_geography import rebuild_capital_geography_hook
+from build_capital_projects import rebuild_capital_projects_hook
+from build_capital_history import rebuild_capital_history_hook
+from build_capital_stats import rebuild_capital_stats_hook
 from modules.errfmt import exc_str
+from modules import vendorids
+from modules import sourcedupes
 
 # Credential resolution lives in one place — see modules/dbcreds.py.
 try:
@@ -214,10 +234,76 @@ ALERT_TO = os.environ.get("PIPELINE_ALERT_TO", "devinbalkind@gmail.com")
 # Why: Derived analytics (dashboard_data.json, aggregation tables, etc.) must
 # be rebuilt when their source datasets are updated.
 
+async def invalidate_vendor_id_map_hook(conn):
+    """Drop the cached vendor name -> supplier id map after a `vendors` ingest.
+
+    `modules/vendorids.unique_map` caches the map (measured 2026-09-01 as the
+    single largest cost in /digital-reform/all: ~750ms on the critical path of
+    every param-cache miss). `vendors` is DROP+RENAMEd on every ingest, so this
+    is the moment the map goes stale.
+
+    ⚠ The hook is the PROMPT invalidator, not the only one. The "daily" extractor
+    ingest actually runs ~16 days in 21, so vendorids also carries a TTL — a hook
+    that fires four days in five is not a staleness bound.
+
+    ⚠ Takes `conn` and ignores it: the signature is the hook contract, and the
+    cache lives in this process's memory, not in the database. Safe because the
+    api runs a SINGLE uvicorn worker (verified: no --workers flag), so there is
+    exactly one cache to clear.
+    """
+    vendorids.invalidate()
+
+
 POST_INGEST_HOOKS = {
     "nyccivilservicetitles": [generate_titles_dashboard],
     "positionschedule": [generate_titles_dashboard],
     "capitalprojectsdollarscomp": [enrich_geo_json_hook],
+    # ── The capital spine, its history, its geography and its stats ────────
+    # ⚠⚠ ORDER IS LOAD-BEARING, AND THE DEPENDENCY CROSSES WHAT WERE TWO
+    # BRANCHES — so neither side had it right alone. History reads
+    # `capital_projects`; stats reads the spine, the history AND the district
+    # crosswalk (`build_capital_stats` JOINs `capital_project_districts` for its
+    # cd/cc/sd/nta scopes and reads `capital_project_geometry`), while
+    # `build_capital_geography` reads none of them. Hence:
+    #     spine -> history -> geography -> stats
+    # `run_post_ingest_hooks` runs a table's hooks in list order, which is the
+    # only reason this works without an explicit dependency graph.
+    #
+    # ⚠⚠ `capprojectsbudgetsandschedule` WAS REGISTERED BY BOTH BRANCHES, AND A
+    # PYTHON DICT LITERAL SILENTLY KEEPS ONLY THE LAST DUPLICATE KEY. Resolving
+    # this conflict by pasting both blocks in would have dropped one entire set
+    # of hooks with nothing raising and every test still green — the spine would
+    # simply never rebuild on that source, or the crosswalk never would. The two
+    # lists are therefore COMBINED into one entry, in dependency order.
+    #
+    # ⚠ Registered on EVERY source that feeds the spine, because a rebuild is
+    # cheap (~15s) and a source landing without one leaves the spine describing
+    # a plan that no longer exists.
+    # ⚠ The Dashboard (`capprojectsbudgetsandschedule`) is in the geography list
+    # because the crosswalk is a UNION of geometry and the published
+    # community-board TEXT, and the Dashboard is one of the two text sources — a
+    # new reporting period changes which projects can be PLACED, not just their
+    # schedule. Registering only the two geometry sets would leave `cd` coverage
+    # frozen at whatever the last geometry publication implied.
+    "capitalprojectslist": [
+        rebuild_capital_projects_hook,
+        rebuild_capital_history_hook,
+        rebuild_capital_stats_hook,
+    ],
+    "capitalprojectscommitments": [
+        rebuild_capital_projects_hook,
+        rebuild_capital_stats_hook,
+    ],
+    "capprojectsbudgetsandschedule": [
+        rebuild_capital_projects_hook,
+        rebuild_capital_history_hook,
+        rebuild_capital_geography_hook,
+        rebuild_capital_stats_hook,
+    ],
+    "capprojectsbudgetspendhistory": [rebuild_capital_history_hook, rebuild_capital_stats_hook],
+    "capprojectsschedulehistory": [rebuild_capital_history_hook, rebuild_capital_stats_hook],
+    "cpdb_geometry_points":   [rebuild_capital_geography_hook],
+    "cpdb_geometry_polygons": [rebuild_capital_geography_hook],
     # FDNY spatial enrichment: assign battalion_id(s) after Socrata import
     "fire_causes": [enrich_fire_causes_hook],
     "fdny_inspections": [enrich_inspections_hook],
@@ -236,8 +322,11 @@ POST_INGEST_HOOKS = {
     # Track B: which orgs in the civic register are also PASSPort vendors. Name-
     # matched against the vendor list, so it is rebuilt whenever that list
     # changes — which also picks up register changes within a day.
+    # ⚠ `invalidate_vendor_id_map_hook` is APPENDED, and order genuinely does not
+    # matter here: none of the other three reads the cached map, and any that did
+    # would repopulate it from the already-swapped table.
     "vendors": [derive_vendor_enrichment_hook, derive_doing_business_hook,
-                derive_org_vendor_hook],
+                derive_org_vendor_hook, invalidate_vendor_id_map_hook],
     # Which City Record notices name a product the City licenses, for the panel
     # on each licence family page. Matched against the notice BODY via
     # idx_crol_body_fts, so it belongs to the table that carries that index.
@@ -253,6 +342,23 @@ POST_INGEST_HOOKS = {
     # days (2026-08-06 -> 08-10). The links are therefore as fresh as the last
     # crol ingest, which `notice_product_links.built_at` records.
     "crol": [derive_notice_product_links_hook],
+    # Which contracts belong to a curated PROGRAMME (task 2eba1fce (b)).
+    # Membership is resolved against contract titles and ids, so it is rebuilt
+    # whenever the extractor DROP+RENAMEs this table — daily.
+    #
+    # ⚠ THAT THIS TABLE'S HOOKS ACTUALLY RUN WAS MEASURED, NOT ASSUMED. crol's
+    # hooks were registered, correctly ordered and verified present in the live
+    # process for a month while never firing, because its importer bypasses the
+    # scheduler entirely. The usual tell — a `[hooks] Running N ...` line in the
+    # api log — was unavailable here (the container had restarted past the
+    # ingest), so it was checked the durable way instead: all seven declared
+    # indexes on `contracts` were present after the 2026-08-26 04:01 ingest, and
+    # `recreate_table_indexes` is the only thing that restores them after a
+    # DROP+RENAME. Their existence is the evidence.
+    #
+    # ⚠ Ordered AFTER the index lambda, which the loop below `insert(0, ...)`s —
+    # this hook reads `contracts` by contract_id and title.
+    "contracts": [derive_program_groups_hook],
 }
 
 
@@ -306,8 +412,32 @@ TABLE_INDEXES = {
         # The notice<->solicitation prefix join: the 10-char EPIN prefixes the PIN.
         ("idx_crol_pin10", 'left(trim("PIN"), 10)'),
     ],
+    # ⚠ MANDATORY, not a nicety. The school-profile section runs
+    # `WHERE "Geographic Subdivision" = $1` on every page view against 321,002
+    # rows; unindexed that is a sequential scan per view. Declared here and
+    # never by hand, because the ingest DROPs and recreates the table.
+    "graduationoutcomes": [
+        ("idx_grad_dbn", '"Geographic Subdivision"'),
+        ("idx_grad_slice", '"Report Category", "Category", "Cohort"'),
+    ],
     "expensebudgetonnycopendata": [("idx_expensebudget_wegov_org_id", '"wegov-org-id"')],
-    "capitalprojectsmilestones": [("idx_capitalprojectsmilestones_wegov_org_id", '"wegov-org-id"')],
+    # ⚠⚠ THE CAPITAL PROFILE'S TWO SLOWEST PANELS (2026-09-24). `/p/{id}` filters
+    # both tables on an EXPRESSION over the id columns, so a plain index could not
+    # serve it and both ran as sequential scans — twice each per page view (the
+    # row query and its "latest vintage" subquery). Measured on prod: ~150ms and
+    # 12,094 / 28,148 pages read from disk per query, and the two panels were
+    # ~80% of the endpoint. The expressions are spelled EXACTLY as the queries in
+    # routers/capital.py write them (`_QUALIFIED` for climate, the lpad/btrim
+    # pair for milestones); a guard pins that they match, because an index on a
+    # differently-written expression is silently ignored by the planner.
+    # ⚠ The milestones table is the RETIRED Oct-2023 series and is not being
+    # re-ingested, so its hook may never fire: the declared wegov-org-id index
+    # below did not exist on prod. These were also created by hand once.
+    "capitalprojectsmilestones": [("idx_capitalprojectsmilestones_wegov_org_id", '"wegov-org-id"'),
+                                  ("idx_cpm_agency_project",
+                                   'lpad("MANAGING_AGCY_CD"::text, 3, \'0\'), upper(btrim("PROJECT_ID"))')],
+    "climatebudgeting": [("idx_climatebudgeting_project",
+                          'upper(replace(btrim("Project Id"), \' \', \'\'))')],
     # Live name, per the note at the top of this map.
     "payrolldata": [("idx_payrolldata_orgid", '"wegov-org-id"')],
     # The three PASSPort tables had ZERO indexes — measured on prod 2026-08-04,
@@ -1551,8 +1681,11 @@ async def rebuild_glob_stats(conn: asyncpg.Connection):
                 stats[key] = await _notice_count(conn, sec, days)
 
         # ── Schools ────────────────────────────────────────────
+        # ⚠ This tile is CACHED, so a raw count here outlives a fixed endpoint
+        # by a whole rebuild cycle. The City publishes 59 schools twice; see
+        # modules/sourcedupes.
         stats['schools_no'] = await _safe_val(
-            conn, "SELECT count(*) FROM schoollocations")
+            conn, f"SELECT count(*) FROM {sourcedupes.relation('schoollocations')}")
         stats['students_no'] = float(await _safe_val(conn, """
             SELECT sum(cast("Org Enroll" as decimal))
             FROM scaenrollmentcapacity
@@ -2091,6 +2224,52 @@ async def process_socrata_dataset(conn: asyncpg.Connection, ds: dict,
               f"{result.get('error')}")
 
 
+def already_ingested_today(last_ingested, now):
+    """Has this dataset been ingested on the CURRENT UTC calendar day?
+
+    ⚠⚠ THIS WAS `(now - last_ingested).days < 1`, A 24-HOUR DELTA, and the
+    difference cost real ingests. Measured over 21 days: contracts ran on 16,
+    solicitations 16, vendors 15, crol 14 — the extractor datasets advertised
+    as daily were ingesting on about three days in four.
+
+    The mechanism, proven live on 2026-08-29 to the second. The cycle is
+    anchored to process start (60s after boot, then 86400s) and the api is
+    restarted daily at 04:00, so it lands at ~04:01 — but any OTHER restart
+    that triggers an ingest re-stamps `last_ingested_at` at that time of day,
+    and the next 04:01 cycle is then less than 24h later and skips a whole day:
+
+        [scheduler] Starting daily data check at 2026-08-29T04:01:10.468579+00:00
+        [scheduler] contracts: already ingested today
+        last_ingested_at = 2026-08-28 04:01:24.742212+00
+        04:01:10.468 - 04:01:24.742 = 23:59:45.726 -> .days == 0 -> SKIP
+
+    Contracts, solicitations and vendors were all skipped **by 14 seconds**,
+    while printing "already ingested today" on a day whose last ingest was
+    YESTERDAY. That false message is much of why it went unnoticed, so the
+    caller now prints the date it is actually talking about.
+
+    ⚠ THE ACCEPTED PRICE, stated because it is a real behaviour change: a
+    calendar-day test re-ingests if a cycle runs shortly after midnight on
+    something ingested late the previous evening. That costs one extra ingest,
+    occasionally. The alternative of loosening the delta to ~20h was measured
+    against the same 21 days and does NOT fix the defect — a 19:00 ingest still
+    leaves the next 04:01 cycle 9h later, so the day is still skipped. Only a
+    calendar comparison removes the coupling to what time of day the last
+    ingest happened to occur.
+
+    ⚠ Not a bare `==`: `>=` also covers a stamp in the future, which a clock
+    skew or a restored backup can produce, and which would otherwise re-ingest
+    on every cycle forever.
+    """
+    if not last_ingested:
+        return False
+    if last_ingested.tzinfo is not None:
+        last_ingested = last_ingested.astimezone(timezone.utc)
+    if now.tzinfo is not None:
+        now = now.astimezone(timezone.utc)
+    return last_ingested.date() >= now.date()
+
+
 async def process_extractor_dataset(conn: asyncpg.Connection, ds: dict,
                                     session: aiohttp.ClientSession,
                                     force: bool = False):
@@ -2106,8 +2285,9 @@ async def process_extractor_dataset(conn: asyncpg.Connection, ds: dict,
 
     # Check if already ingested today
     last_ingested = ds.get('last_ingested_at')
-    if not force and last_ingested and (now - last_ingested).days < 1:
-        print(f"[scheduler] {table_name}: already ingested today")
+    if not force and already_ingested_today(last_ingested, now):
+        print(f"[scheduler] {table_name}: already ingested today "
+              f"({last_ingested:%Y-%m-%d %H:%M:%SZ})")
         await update_registry(conn, ds['id'], last_checked_at=now)
         return
 
@@ -2127,6 +2307,14 @@ async def process_extractor_dataset(conn: asyncpg.Connection, ds: dict,
     if table_name == 'contracts':
         result = await _import_contracts_transformed(
             conn, table_name, source_url, session)
+    elif table_name == 'parkscapitaltracker':
+        # ⚠ The Parks tracker is JSON, which the CSV loader cannot read, and the
+        # extractor->S3->scheduler route is unavailable (no AWS credentials on
+        # prod since the lake moved to local disk). Branching here follows the
+        # precedent `contracts` set and puts the feed on the SAME daily extractor
+        # schedule with no new mechanism.
+        from extractors.parks_capital_tracker import import_parks_tracker
+        result = await import_parks_tracker(conn, session)
     else:
         result = await _import_from_url(conn, table_name, source_url, session)
 

@@ -18,10 +18,25 @@ import sys
 import urllib.request
 
 MCP_URL = os.environ.get("MCP_URL", "https://api.databook.nyc/mcp")
-# A browser-like UA: api.databook.nyc sits behind a Cloudflare bot rule that
-# 403s obviously-automated agents. Real MCP clients send browser-ish UAs.
+
+# Real count is 40 (test_mcp_docs_sync.py pins it against the docs page). This
+# floor exists only to make an empty/truncated list fail instead of passing.
+MIN_TOOLS = 35
+# ⚠⚠ BROWSER-SHAPED, BUT IT MUST IDENTIFY ITSELF. The plain browser UA this
+# used to send made the audit INDISTINGUISHABLE FROM A REAL USER in the MCP
+# log — 40 tool calls a day, every day, landing in the same place as genuine
+# sessions, so usage analytics would have read our own health check as user
+# demand. `AUDIT_UA_TOKEN` is what scripts/usage-rollup.sh excludes on.
+#
+# ⚠ The browser shape is KEPT rather than replaced. The original comment said
+# api.databook.nyc "403s obviously-automated agents"; re-tested 2026-08-21 and
+# that is NOT true today (a bare `databook-mcp-audit/1` gets 200 — the Managed
+# Challenge on this hostname is disabled). But the rule could be re-enabled, and
+# an audit that starts 403ing is a red monitor manufactured for the sake of a
+# tidier string. Appending the token costs nothing and survives either world.
+AUDIT_UA_TOKEN = "databook-mcp-audit/1"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 " + AUDIT_UA_TOKEN)
 
 # Representative arguments per tool. Detail tools use IDs that may not resolve;
 # a graceful "not found" counts as working — only a raised exception is a failure.
@@ -111,6 +126,21 @@ def main():
 
     listed = _post({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, sid=sid)
     tools = [t["name"] for t in listed["result"]["tools"]]
+
+    # ⚠⚠ A FLOOR, BECAUSE AN EMPTY TOOL LIST USED TO PASS. Without this, a server
+    # that handshakes but registers nothing walks the loop zero times, collects no
+    # exceptions and prints "PASS: all 0 tools executed without exceptions" —
+    # exit 0. That is the same defect as the guard that scanned zero files: an
+    # outcome of zero is indistinguishable from never having run, and it matters
+    # more now this audit is on a schedule and nobody reads a green run.
+    # The exact count is pinned against the docs by test_mcp_docs_sync.py; this is
+    # only here to catch a truncated or empty registration, so it sits well below
+    # the real 40 rather than tracking it.
+    if len(tools) < MIN_TOOLS:
+        print(f"FAIL: server advertised only {len(tools)} tools (floor {MIN_TOOLS}). "
+              "An empty or truncated tool list is a broken server, not a pass.",
+              file=sys.stderr)
+        return 3
 
     print(f"Auditing {len(tools)} tools against {MCP_URL}\n")
     broken = []

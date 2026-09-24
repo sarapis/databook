@@ -106,49 +106,72 @@ class DistDatasets
 			'map' => ['cd' => 'Community Board', 'cc' => 'Council District'],
 		],
 
-		'projects' => [
+		'projects' => [						#capital_projects (the spine)
+			// ⚠⚠ REPOINTED OFF `capitalprojectsdollarscomp` — the last surface on
+			// the series NYC retired 2023-10-26. The old contract joined that table
+			// to a `capitalprojects_{type}_idx` on `PROJECT_ID`; the spine's own
+			// crosswalk is `capital_project_districts`, keyed on
+			// `(agency_key, fms_id)` — the grain a bare FMS id does not have.
+			// ⚠ EVERY MONEY CELL DROPPED ITS `, 1000`. The retired series is
+			// denominated in THOUSANDS and the spine in USD, so carrying one over
+			// renders $652.6M as $652.6B (invariant 2).
+			'name' => 'Capital Projects',
 			'fullname' => 'Capital Project Detail Data - Dollars',
-			'table' => 'capitalprojectsdollarscomp',
-			'description' => 'This dataset contains capital commitment plan data by project type, budget line and source of funds. The dollar values are in thousands. The dataset is updated three times a year during the Preliminary, Executive and Adopted Capital Commitment Plans.',
-			'hdrs' => ['Publication Date', 'Project ID', 'Name', 'Scope', 'Category', 'Borough', 'Planned Cost', 'Budget Increase', 'Timeline Change'],
-			'sort' => ['"Project ID"', '"Publication Date"'],
-			'visible' => [false, true, true, true, true, true, true, true, true],
-			'hide_on_map_open' => '0, 4, 6, 7, 8',
+			'table' => 'capital_projects',
+			'description' => 'The derived capital projects spine: every project NYC publishes in the Capital Commitment Plan, the Capital Projects Dashboard, or the retired 2023 detail series, resolved to one row per (agency, FMS id). Only projects the City attributes to this district are listed.',
+			// ⚠ NO SCOPE COLUMN. The old contract carried one because the retired
+			// series stored a district string per row; the spine's district link is
+			// a crosswalk, and every row here is in THIS district by construction.
+			'hdrs' => ['Project ID', 'Agency', 'Name', 'Asset category', 'Phase', 'Planned commitments', 'Spent', 'In current plan'],
+			'visible' => [true, true, true, true, true, true, true, true],
+			'hide_on_map_open' => '3, 6, 7',
 			'flds' => [
-					'function (r) { return toDashDate(r["PUB_DATE"]) }',
-					'function (r) { return `<a href="/p/${r.PROJECT_ID}_${slug(r.PROJECT_DESCR)}">${r.PROJECT_ID}</a>` }', 
-					'"PROJECT_DESCR"', '"SCOPE_TEXT"', '"TYP_CATEGORY_NAME"', 
-					'"BORO"', 
-					'function (r) { return `<span data-content="${toFin(r["BUDG_ORIG"], 1000)}">${toFinShortK(r["BUDG_ORIG"], 1000)}</span>` }',
-					'function (r) { 
-						if (!r["ORIG_BUD_AMT"])
-							return "NA"
-						return r["BUDG_DIFF"] == 0 ? "0" :
-							(r["BUDG_DIFF"] > 0 
-								? `<span class="good" data-content="-${toFin(r["BUDG_DIFF"], 1000)}">-${toFinShortK(r["BUDG_DIFF"], 1000)}</span>` 
-								: `<span class="bad" data-content="${toFin(-r["BUDG_DIFF"], 1000)}">${toFinShortK(-r["BUDG_DIFF"], 1000)}</span>`);
-					}',
-					'function (r) { 
-						if ((r["END_DIFF"] == "-") || (r["END_DIFF"] == "12/31/1969"))
-							return "NA"
-						var v = parseFloat(r["END_DIFF"]).toFixed(1).toString()
-						if (v < 0)
-							return `<span class="bad">${-v} years late</span>`
-						return v > 0 ? `<span class="good">${v} years early</span>` : `<span class="good">on time</span>`;
-					}'
+					// ⚠ THE CANONICAL, AGENCY-CONCATENATED ID — 1,160 bare FMS ids are
+					// carried by more than one agency across 2,371 rows.
+					'function (r) { return `<a href="/p/${r.id}_${slug(r.description)}">${r.id}</a>` }',
+					// ⚠ 4,568 spine rows carry no `wegov_org_id`, so the agency is not
+					// always a link; rendering one anyway produced `/o/-`.
+					'function (r) { return r["wegov_org_id"] ? `<a href="/o/${r["wegov_org_id"]}-${slug(r["agency_name"])}/projects">${r["agency_name"]}</a>` : (r["agency_name"] || r["agency_acro"] || "") }',
+					// ⚠⚠ EVERY CELL RETURNS A STRING, NEVER null — a null hands
+					// DataTables something it tries to sort and search, which threw
+					// `n.slice is not a function` while the rows still RENDERED.
+					'function (r) { return r["description"] || "" }',
+					'function (r) { return r["type_category"] || "" }',
+					// ⚠ A blank phase means NYC publishes no schedule, not "no phase".
+					'function (r) { return r["current_phase"] || "Not published" }',
+					// ⚠ `data-content` is the SORT KEY — money columns are not monotonic
+					// in their visible text. Multiplier 1, not 1000.
+					'function (r) { return `<span data-content="${toFin(r["planned_total_usd"], 1)}">${toFinShortK(r["planned_total_usd"], 1)}</span>` }',
+					'function (r) { return `<span data-content="${toFin(r["spent_total_usd"], 1)}">${toFinShortK(r["spent_total_usd"], 1)}</span>` }',
+					'function (r) { return r["in_current_plan"] ? "Yes" : "No" }'
 				],
-			'filters' => [4 => null],
-			'details' => [
-					'Original Budget' => '`<span data-content="${toFin(r["BUDG_ORIG"], 1000)}">${toFinShortK(r["BUDG_ORIG"], 1000)}</span>`',
-					'Prior Spending' =>  '`<span data-content="${toFin(r["CITY_PRIOR_ACTUAL"], 1000)}">${toFinShortK(r["CITY_PRIOR_ACTUAL"], 1000)}</span>`', 
-					'Planned Spending' => '`<span data-content="${toFin(r["CITY_PLAN_TOTAL"], 1000)}">${toFinShortK(r["CITY_PLAN_TOTAL"], 1000)}</span>`',
-					'Community Boards Served' => 'r["COMMUNITY_BOARD"]',
-					'Budget Lines' => 'r["BUDGET_LINE"]',
-					'Site Description' => 'r["SITE_DESCR"]',
-					'Explanation for Delay' => 'r["DELAY_DESC"]',
-			],
-			'order' => [[8, 'asc']],
-			'map' => ['cd' => 'wegov-comd-id', 'cc' => 'Council District', 'nta' => 'wegov-nta-code'],
+			'filters' => [1 => null, 3 => null, 4 => null],
+			// ⚠⚠ `order` IS NOT OPTIONAL — the view reads it inside an `@if`, and an
+			// undefined index is an ErrorException that the `@if` does not guard.
+			'order' => [[5, 'desc']],
+			// ⚠⚠ `map` IS LOAD-BEARING: DistDatasets reads it to decide which sections
+			// a district TYPE offers, and `get()` returns null for a type it omits.
+			// ⚠⚠ `sd` IS NOW HERE, and that was the whole of "school districts are
+			// broken". Measured 2026-09-10 before changing anything:
+			//
+			//     /d/sd-4_district                        200
+			//     /districtXHR/sd/4/projects              **404**
+			//     /get/capital/stats/sd/4                 200 — 144 projects
+			//     /get/capital/projects/by-district/sd/4  200 — **144 rows**
+			//
+			// 144 == 144, so the spine serves school districts completely; the 404
+			// was this map, one key wide. `projectSectionXHR` was already sd-ready
+			// (it carries an `sd` branch for `linkedAgencyUrl` and for `datasets`).
+			// ⚠ THE VALUE IS A PRESENCE MARKER FOR THIS CONTRACT, NOT A COLUMN.
+			// Only `sectionXHR` reads `map[$type]`'s value (as the `f=` parameter),
+			// and `Districts::index` routes `projects` to `projectSectionXHR`, which
+			// builds the spine URL and never reads it. The four values named columns
+			// on the RETIRED series and have been dead since the repoint; they name
+			// the spine's actual crosswalk now so the map cannot be read as a claim
+			// about a column that no longer decides anything. A guard pins that
+			// `projects` never reaches `sectionXHR`.
+			'map' => ['cd' => 'capital_project_districts', 'cc' => 'capital_project_districts',
+			          'nta' => 'capital_project_districts', 'sd' => 'capital_project_districts'],
 		],
 
 	// ------ shools ------------------------
@@ -183,6 +206,34 @@ class DistDatasets
 			'description' => 'Capital Project Schedules and Budgets',
 			'details' => [],
 			'map' => ['sd' => 'Project Geographic District'],
+		],
+
+		'graduation' => [					# mjm3-8dw8 — docs/GRADUATION-INGEST-PLAN.md
+			'fullname' => 'Graduation Results, Cohorts 2012-2019',
+			'sectionTitle' => 'Graduation',
+			'table' => 'graduationoutcomes',
+			'description' => 'Graduation, Regents and dropout outcomes for the district as a whole, by cohort. Cohorts 2012-2019 are the graduating classes of 2016-2023; a cohort is labelled by the year students entered 9th grade.',
+			'hdrs' => ['Cohort Year', 'Cohort', 'Category', '# Total Cohort', '# Grads', '% Grads', '# Advanced Regents', '% Advanced Regents of Cohort', '# Dropout', '% Dropout'],
+			'visible' => [true, true, true, true, true, true, true, true, true, true],
+			'flds' => ['"Cohort Year"', '"Cohort"', '"Category"',
+				'function (r) { return commaThousands( r["# Total Cohort"] ); }',
+				'function (r) { return commaThousands( r["# Grads"] ); }',
+				'"% Grads"',
+				'function (r) { return commaThousands( r["# Advanced Regents"] ); }',
+				'"% Advanced Regents of Cohort"',
+				'function (r) { return commaThousands( r["# Dropout"] ); }',
+				'"% Dropout"'],
+			// ⚠ Defaulted, NOT filtered at source: the endpoint returns every cohort
+			// definition and every demographic breakdown (674-688 rows per district,
+			// measured), and the reader can clear these to reach them. '4 year June'
+			// is NYC's headline on-time measure.
+			'filters' => [1 => null, 2 => null],
+			'fltPreselect' => [1 => '4 year June', 2 => 'All Students'],
+			'sort' => ['"Cohort Year"', '"Category"'],
+			'details' => [],
+			// ⚠ A district id here is a BARE NUMBER (1-32), the same shape as
+			// schoollocations.Geographical_District_code — verified, all 32 present.
+			'map' => ['sd' => 'Geographic Subdivision'],
 		],
 
 		'enrollment' => [
@@ -257,13 +308,21 @@ class DistDatasets
 	public $list = [
 		'city-council-discretionary' => 'City Council Discretionary Spending',
 		'city-council-stat-cases' => 'City Council Stat Cases',
-		'projects' => 'Projects',
+		// ⚠⚠ THESE TWO USED TO BOTH READ "Projects", AND GIVING `sd` A CAPITAL
+		// SECTION PUT THEM IN ONE MENU. They are different datasets: `projects`
+		// is the capital spine (its own contract is already named 'Capital
+		// Projects'), and `school-projects` is the SCA's
+		// `scacapitalprojectschedules` — school CONSTRUCTION, keyed on
+		// 'Project Geographic District'. `$list` is flat, so the label cannot be
+		// varied per district type; both are renamed to what they actually are.
+		'projects' => 'Capital Projects',
 		'requests' => 'Requests',
 		'facilities' => 'Facilities',
 		'enrollment' => 'Future',
 		'enrollment-past' => 'Past',
 		'schools' => 'Schools',
-		'school-projects' => 'Projects',
+		'school-projects' => 'School Construction',
+		'graduation' => 'Graduation',
 	];
 	
 	public $menu = [
@@ -291,7 +350,15 @@ class DistDatasets
 		],
 		'sd' => [
 			'schools',
+			// ⚠ AFTER `schools`, NOT BEFORE — `defaultSection['sd']` stays 'schools',
+			// which is the canonical url already published for every school
+			// district. Deriving the landing section from the first menu item is
+			// exactly the thing `$defaultSection` exists to prevent, but leaving
+			// the order alone means the two cannot disagree even if someone later
+			// does derive it.
+			'projects',
 			'school-projects',
+			'graduation',
 			'Enrollment' => [
 				'enrollment',
 				'enrollment-past',
@@ -325,6 +392,47 @@ class DistDatasets
 		return '';
 	}
 	
+	
+	// ⚠⚠ `projects` IS NOT A UNIVERSAL LANDING SECTION, and the reason has
+	// CHANGED — corrected 2026-09-10. It used to be that `sd` had no capital
+	// section at all (the contract's `map` carried no `sd` key, so
+	// get('projects','sd') returned null and projectSectionXHR() abort(404)ed).
+	// `sd` HAS one now. What is still true is that its LANDING section is
+	// `schools`, because that is the canonical url already published for every
+	// school district — so this map stays declared rather than derived.
+	// Every sd district URL that named no section used to land
+	// exactly there, because the bare /d/{type}-{id}-{dslug} redirect AND
+	// Schema::district()'s canonical url both hardcoded 'projects' — so the one
+	// URL shape a link would naturally use was the one guaranteed to 404, while
+	// /d/sd-10-x/schools worked the whole time (which is what the districts map
+	// itself links to). One owner now, so a landing section cannot be decided
+	// in two places again.
+	// ⚠ Declared per type rather than derived from menu()'s first item: cd, cc
+	// and nta land on `projects` today and their canonical urls are published,
+	// so deriving would silently move three types' canonical url to
+	// city-council-discretionary. `defaultSection()` falls back to the first
+	// menu item, so a new type that has a menu cannot 404 before anyone
+	// declares its landing section; a guard demands the declaration anyway, so
+	// the fallback is a safety net rather than the answer. It returns null for
+	// a type with no menu at all, which is a state `sectionXHR` already cannot
+	// serve.
+	public $defaultSection = [
+		'cd' => 'projects',
+		'cc' => 'projects',
+		'nta' => 'projects',
+		'sd' => 'schools',
+	];
+	
+	public function defaultSection($type)
+	{
+		if (isset($this->defaultSection[$type]))
+			return $this->defaultSection[$type];
+		if (isset($this->menu[$type]))
+			foreach ($this->menu($type) as $vv)
+				return is_array($vv) ? reset($vv) : $vv;
+		return null;
+	}
+	
 	public function get($section, $type)
 	{
 		$dd = $this->dd[strtolower($section)] ?? null;
@@ -345,13 +453,27 @@ class DistDatasets
 		$dd['fltDelim'] = $fltDel;
 		
 		$dd['fltsCols'] = implode(',', array_keys($dd['filters']));
+		// ⚠⚠ PRESELECTS COME FROM AN EXPLICIT `fltPreselect`, NEVER FROM A NON-NULL
+		// VALUE IN `filters`. `filters` has documented `fld no => def value` since it
+		// was written and only the KEYS were ever read, so a value there is DORMANT —
+		// and `requests` carries one (`0 => '2020-07-01'`, a Publication Date).
+		// Deriving preselects from `filters` would therefore have silently pinned the
+		// live Requests page to a single date. Opt in explicitly instead, so a dormant
+		// declaration stays dormant and turning one on is a visible edit.
+		$pre = [];
+		foreach ((array)($dd['fltPreselect'] ?? []) as $i=>$v)
+			$pre[$i + $inc] = $v;
+		$dd['fltDefaults'] = (object)$pre;
 		return $dd;
 	}
 
 
 	
 
-	public function stats_data_sources($dd, $id, $type, $dslist=null)
+	// ⚠ `$counts` is LAST and optional: this signature differs from
+	// `ProjectsDatasets`' and a positional insert would have silently landed the
+	// counts in `$dslist`. (It nearly did — a blind edit across both controllers.)
+	public function stats_data_sources($dd, $id, $type, $dslist=null, $counts=null)
 	{
 		$stats_datasets = [
 			
@@ -359,7 +481,31 @@ class DistDatasets
 				route('districtsPreset', ['id'=>$id, 'type'=>$type, 'dslug'=>'-', 'section'=>'city-council-discretionary']),
 				'Discretionary Funding'
 			],
+			// ⚠⚠ THE SPINE'S SOURCES, NOT ONE OF THEM. The district capital tab reads
+			// `capital_projects`, which is built from FOUR publications — and this map
+			// named only `capitalprojectsdollarscomp`, the retired one, whose row is
+			// blank in the panel ("not tracked", no description, no date) because it is
+			// never ingested. So the sources panel for a tab whose every figure comes
+			// from the spine listed a single 2023 publication and nothing else.
+			// Measured 2026-09-10: "normalized data from 5 datasets containing 227,395
+			// records", the capital row contributing 0.
+			// ⚠ The retired series STAYS. `build_capital_projects.py` reads it for scope
+			// text, borough and the 2023 budgets, so naming it is accurate; naming it
+			// ALONE is what was wrong. `/projects` already lists all four and reads
+			// 475,136 records.
 			'capitalprojectsdollarscomp' => [
+				route('districtsPreset', ['id'=>$id, 'type'=>$type, 'dslug'=>'-', 'section'=>'projects']),
+				'Projects'
+			],
+			'capitalprojectslist' => [
+				route('districtsPreset', ['id'=>$id, 'type'=>$type, 'dslug'=>'-', 'section'=>'projects']),
+				'Projects'
+			],
+			'capprojectsbudgetsandschedule' => [
+				route('districtsPreset', ['id'=>$id, 'type'=>$type, 'dslug'=>'-', 'section'=>'projects']),
+				'Projects'
+			],
+			'capitalprojectscommitments' => [
 				route('districtsPreset', ['id'=>$id, 'type'=>$type, 'dslug'=>'-', 'section'=>'projects']),
 				'Projects'
 			],
@@ -452,7 +598,7 @@ class DistDatasets
 				'<a href="' . $route[0] . "\">{$route[1]}</a>",
 				$ii[$tbl]['Descripton'],
 				$ii[$tbl]['Last Updated'],
-				'<span id="stats_' . $tbl . '"></span>',
+				\App\Custom\ProjectsDatasets::countCell($tbl, $counts),
 			];
 		}
 		return $rr;

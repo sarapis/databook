@@ -1549,20 +1549,38 @@ async def get_hearing_briefing_api(event_id: str, year: int = 2026):
 
         # Capital projects
         try:
-            conditions = " OR ".join(f"man_agency_name ILIKE ${i+1}" for i in range(len(agency_patterns)))
+            # ⚠⚠ ALL FOUR COLUMN NAMES HERE WERE WRONG, AND THE BRIEF NEVER
+            # SAID SO. `project_id`, `short_description`, `total_plan_commtmts`
+            # and `man_agency_name` do not exist on `capitalprojectslist` —
+            # measured 2026-09-06, the query raises `column "project_id" does
+            # not exist`. It sits inside the `except Exception` below, which
+            # only prints, so EVERY hearing brief ever generated has carried an
+            # empty capital section and nothing surfaced it. Same family as the
+            # search group that returned [] for eight weeks.
+            # The real names are projectid / description / plannedcommit_total /
+            # magencyname, and `tests/test_hearing_brief_capital.py` pins them
+            # against the live schema so a rename breaks the build, not the brief.
+            #
+            # ⚠⚠ AND `plannedcommit_total` IS TEXT, so ordering it without a cast
+            # sorts LEXICOGRAPHICALLY. Fixing only the column names would have
+            # shipped a "largest capital projects" list reading $9.98M / $9.96M /
+            # $995K where the real top three are $1.84B / $1.68B / $1.08B — off
+            # by two orders of magnitude, and plausible enough to go unnoticed.
+            # Measured 2026-09-06 on Parks + DOT.
+            conditions = " OR ".join(f"magencyname ILIKE ${i+1}" for i in range(len(agency_patterns)))
             params = tuple(agency_patterns) + (3,)
             result = await _select(f"""
-                SELECT project_id, short_description, total_plan_commtmts as budget, man_agency_name
+                SELECT projectid, description, plannedcommit_total as budget, magencyname
                 FROM capitalprojectslist
                 WHERE ({conditions})
-                ORDER BY total_plan_commtmts DESC NULLS LAST
+                ORDER BY NULLIF(btrim(plannedcommit_total), '')::numeric DESC NULLS LAST
                 LIMIT ${len(agency_patterns)+1}
             """, params)
             rows = result.get("rows", []) if isinstance(result, dict) else result
             for r in rows:
                 theme_result["capital_projects"].append({
-                    "project_id": r.get("project_id", ""),
-                    "description": (r.get("short_description") or "N/A")[:60],
+                    "project_id": r.get("projectid", ""),
+                    "description": (r.get("description") or "N/A")[:60],
                     "budget": float(r["budget"]) if r.get("budget") else None,
                 })
         except Exception as e:

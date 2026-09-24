@@ -67,6 +67,21 @@
                                     {{ $agency['name'] }}
                                 </a>
                                 @endif
+                                {{-- ⚠⚠ A MERGED ROW SAYS SO. The City files DCAS under two
+                                     agency strings and the Office of Criminal Justice under
+                                     two more, so this listing showed each of them twice with
+                                     both rows linking to ONE org profile. They are merged now
+                                     — and a reader cross-checking against PASSPort would
+                                     search the spelling we stopped showing and find nothing,
+                                     so the row names every string it covers. 2 of 44 rows
+                                     today; the other 42 render exactly as before.
+                                     ⚠ The variable is assigned on its own line, because a
+                                     Blade directive glued to a word character does not
+                                     compile. --}}
+                                @php $sp = $agency['spellings'] ?? []; @endphp
+                                @if(count($sp) > 1)
+                                <div class="small text-muted mt-1">Published as: {{ implode(' · ', $sp) }}</div>
+                                @endif
                             </td>
                             <td class="db-num">{{ number_format($agency['contract_count'] ?? 0) }}</td>
                             <td class="db-num fw-semibold">${{ number_format($agency['total_value'] ?? 0, 0) }}</td>

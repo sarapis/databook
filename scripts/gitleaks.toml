@@ -46,3 +46,41 @@ paths = [
     '''api/restore_org_chart_nodes\.py''',
     '''api/tests/test_adopt_nyc_orgs\.py''',
 ]
+
+# ── A provenance dict KEY is not an API key ──────────────────────────────────
+#
+# gitleaks' `generic-api-key` rule matches `"key": "<value>"` when the value
+# clears its entropy floor. `api/routers/capital.py` builds the capital
+# profile's data-provenance panel as a list of dicts, each naming the dataset it
+# describes — and `{"key": "milestones_2023", ...}` measured entropy 3.506,
+# just over the line. It is the panel's stable identifier for the 2023
+# milestones series, rendered by <x-db.data-provenance>; there is no credential
+# in that file at all.
+#
+# It started blocking the scan when the capital section landed (line last
+# touched 2026-09-08) and it stopped every public sync until 2026-09-15 —
+# alongside two unexcluded files, which is why it read as one problem and was
+# two.
+#
+# ⚠ SCOPED THREE WAYS, on the airtable entry's precedent above:
+#   * only the `generic-api-key` rule,
+#   * only in the one file that carries this panel,
+#   * only for this exact token.
+# A real credential in capital.py is still caught, and `milestones_2023`
+# anywhere else in the tree is still caught.
+# ⚠ EXACT, not a shape like `^[a-z_]+_\d{4}$`. A sibling key tripping the floor
+# later should fail LOUDLY and be added here as a visible one-line decision —
+# a pattern that quietly exempts a class is how a loosened gate stops being read.
+# ⚠ regexTarget = "secret" and condition = "AND" for the reasons the entry above
+# measured: with "match" the regex tests the whole LINE and allowlists every
+# other credential on it, and with the default OR the `paths` entry alone
+# exempts the entire file.
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^milestones_2023$''']
+paths = [
+    '''api/routers/capital\.py''',
+]

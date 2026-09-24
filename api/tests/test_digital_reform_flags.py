@@ -3,11 +3,12 @@ from routers.oce import (
     _build_your_own_reason,
     _review_flags,
     COMPETITIVE_PROCUREMENT_METHODS,
+    NONCOMPETITIVE_REVIEW_METHODS,
 )
 
 
-def _keys(row, days, has_rebid):
-    return {f["key"] for f in _review_flags(row, days, has_rebid)}
+def _keys(row, days):
+    return {f["key"] for f in _review_flags(row, days)}
 
 
 def test_build_your_own_matches_website_keyword():
@@ -20,45 +21,64 @@ def test_build_your_own_ignores_unrelated_hardware():
 
 
 def test_noncompetitive_flag_set_for_sole_source():
-    keys = _keys({"procurement_method": "Sole Source", "award_amount": 5000}, 900, True)
+    keys = _keys({"procurement_method": "Sole Source", "award_amount": 5000}, 900)
     assert "non_competitive" in keys
 
 
 def test_competitive_method_not_flagged():
     for method in COMPETITIVE_PROCUREMENT_METHODS:
-        keys = _keys({"procurement_method": method.title(), "award_amount": 5000}, 900, True)
+        keys = _keys({"procurement_method": method.title(), "award_amount": 5000}, 900)
         assert "non_competitive" not in keys
 
 
-def test_no_rebid_flag_only_when_no_notice():
-    row = {"procurement_method": "Competitive Sealed Bid", "award_amount": 5000}
-    assert "no_rebid" in _keys(row, 900, has_rebid=False)
-    assert "no_rebid" not in _keys(row, 900, has_rebid=True)
+def test_noncompetitive_means_sole_source_or_negotiated_only():
+    """Owner, 2026-09-24: the flag sat on 605 of 634 renewals because it counted
+    M/WBE small purchases, GSA/OGS piggybacks and renewals as non-competition.
+    Those routes are shown by method; only no-competition-at-all is flagged."""
+    assert NONCOMPETITIVE_REVIEW_METHODS == {"sole source", "negotiated acquisition"}
+    for method in ("Negotiated Acquisition", "Sole Source"):
+        assert "non_competitive" in _keys({"procurement_method": method, "award_amount": 5000}, 900)
+    for method in ("MWBE Non Competitive Small Purchase", "Intergovernmental GSA",
+                   "Intergovernmental OGS", "Renewal", "Amendment", "Subscription",
+                   "Micropurchase", "Line Item Appropriation"):
+        assert "non_competitive" not in _keys({"procurement_method": method, "award_amount": 5000}, 900), method
+
+
+def test_no_open_solicitation_is_no_longer_a_flag():
+    """Retired 2026-09-24: it searched the expiring contract's OWN PIN for a
+    rebid that is always issued under a new one (flagged 633 of 634). The
+    dossier states whether a successor is on record instead."""
+    import inspect
+    from routers import oce
+    assert "has_rebid" not in inspect.signature(_review_flags).parameters
+    for method in ("Competitive Sealed Bid", "Renewal", ""):
+        assert "no_rebid" not in _keys({"procurement_method": method, "award_amount": 5000}, 900)
+    assert "no_rebid" in oce.RETIRED_REVIEW_FLAGS, "an old expiring_flag=no_rebid link would empty the queue"
 
 
 def test_scope_growth_flag():
     row = {"procurement_method": "Competitive Sealed Bid",
            "award_amount": 100_000, "current_amount": 300_000}
-    assert "scope_growth" in _keys(row, 900, True)
+    assert "scope_growth" in _keys(row, 900)
     # No growth → no flag.
     row2 = {"procurement_method": "Competitive Sealed Bid",
             "award_amount": 100_000, "current_amount": 100_000}
-    assert "scope_growth" not in _keys(row2, 900, True)
+    assert "scope_growth" not in _keys(row2, 900)
 
 
 def test_high_value_near_term_flag():
     row = {"procurement_method": "Competitive Sealed Bid", "award_amount": 2_000_000}
-    assert "high_value_near_term" in _keys(row, 100, True)      # ≤365 days
-    assert "high_value_near_term" not in _keys(row, 800, True)  # far out
+    assert "high_value_near_term" in _keys(row, 100)      # ≤365 days
+    assert "high_value_near_term" not in _keys(row, 800)  # far out
     # Small contract expiring soon → not flagged.
     small = {"procurement_method": "Competitive Sealed Bid", "award_amount": 5000}
-    assert "high_value_near_term" not in _keys(small, 100, True)
+    assert "high_value_near_term" not in _keys(small, 100)
 
 
 def test_build_your_own_flag_appears_in_review_flags():
     row = {"procurement_method": "Competitive Sealed Bid", "award_amount": 5000,
            "contract_title": "Public-facing WEBSITE and portal maintenance"}
-    assert "build_your_own" in _keys(row, 900, True)
+    assert "build_your_own" in _keys(row, 900)
 
 
 def test_vendor_lock_in_flag_thresholds():
@@ -74,12 +94,12 @@ def test_vendor_lock_in_flag_thresholds():
 
 
 def _keys2(row, vendor_stats):
-    return {f["key"] for f in _review_flags(row, 900, True, vendor_stats)}
+    return {f["key"] for f in _review_flags(row, 900, vendor_stats)}
 
 
 def _flags(row, **kw):
     return {f["key"] for f in _review_flags(
-        row, kw.get("days", 900), kw.get("has_rebid", True),
+        row, kw.get("days", 900),
         kw.get("vendor_stats"), kw.get("va_stats"),
         kw.get("spent"), kw.get("days_since_start"))}
 
@@ -99,7 +119,7 @@ def test_underused_flag_when_low_spend():
 
 
 def _flags_enr(row, enrich):
-    return {f["key"] for f in _review_flags(row, 900, True, None, None, None, None, enrich)}
+    return {f["key"] for f in _review_flags(row, 900, None, None, None, None, enrich)}
 
 
 def test_build_your_own_uses_ai_rating_when_present():
@@ -190,3 +210,16 @@ def test_digital_reform_views_keep_php_block_strings_entity_free():
     assert not offenders, (
         "HTML entity in a @php string that Blade will escape (renders literally):\n  "
         + "\n  ".join(offenders))
+
+
+def test_products_counts_non_competitive_by_the_queues_rule():
+    """Owner, 2026-09-24: the Products page's "Non-competitive" column follows the
+    queue — sole source or negotiated acquisition. Under the old rule it counted
+    every licence, because none used competitive sealed bid or proposal, so the
+    column equalled the contract count and said nothing."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'routers', 'licenses.py'),
+               encoding='utf-8').read()
+    assert 'd["no_competition"] = method in NONCOMPETITIVE_REVIEW_METHODS' in src
+    assert src.count('if r["no_competition"]') == 3, 'a Products count no longer follows the queue rule'
+    assert 'not r["competitive"]' not in src, 'a count still treats every non-sealed-bid route as non-competitive'

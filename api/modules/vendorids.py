@@ -23,6 +23,8 @@ the name unlinked.
 ⚠ A map cannot duplicate a row. That is the structural reason to prefer it over
 a `HAVING`-filtered join here — the failure mode is "no link", never "two rows".
 """
+import time
+
 from modules.errfmt import exc_str
 
 # ⚠ `HAVING count(DISTINCT ...) = 1` IS THE GUARD, not an optimisation. Dropping
@@ -56,6 +58,52 @@ def from_rows(rows) -> dict:
     return {r["nm"]: r["vendor_id"] for r in (rows or [])}
 
 
+# ⚠⚠ CACHED, AND THIS WAS THE SINGLE LARGEST COST IN /digital-reform/all.
+# Profiled on prod 2026-09-01 by wrapping the REAL select_safe (never by
+# replicating the SQL — a harness that rebuilds a query measures a different
+# system). Of a 2.221s cold request, the top THREE queries were all THIS one:
+# 778 + 767 + 577 = 2.12s, because `_vendors`, `_contracts` and `_expiring` each
+# built the map independently. Nothing else was close — _stats 223ms,
+# _charts:agencies 212ms, _award_by_start_year 251ms.
+#
+# ⭐ AND IT SAT ON THE WRONG SIDE OF THE OTHER CACHE. Those three are the
+# PARAM-DEPENDENT blocks, so this ran on every miss of the full-param cache —
+# i.e. on every novel crawler URL, not merely at cold start. Within each block it
+# is SERIAL (`own queries -> await unique_map`), so it was ~60-75% of that path's
+# wall time. The blocks that WERE proposed for optimisation (stats, charts) live
+# in `_dr_shared_cache` and run about twice a day.
+#
+# ⚠⚠ DEDUPLICATING THE THREE CALLS WOULD NOT HAVE FIXED IT, and that is why this
+# is a cache rather than a hoist to one call before the gather. The three blocks
+# are `asyncio.gather`ed, so the calls ALREADY overlap. Measured on prod:
+#     one call, uncontended      573-649 ms   (map size 36,563)
+#     three concurrent, as-was   754-793 ms wall
+# so computing it once saves only ~181ms of WALL. It does remove ~1.65s of
+# Postgres work per request, which is worth having — but the ~750ms comes off the
+# critical path only by not running the query at all.
+#
+# ⚠ TTL *AND* the post-ingest hook, deliberately, not either alone. `vendors`
+# ingests daily and `invalidate()` is registered on that ingest — but the
+# "daily" extractor ingest is measured to run ~16 days in 21 (a `.days < 1`
+# guard; see the scheduler task), so the hook is NOT a dependable sole
+# invalidator. The TTL bounds staleness to an hour even if the hook never fires.
+_CACHE_TTL = 3600  # seconds
+
+_cache = None      # the map, or None when empty. ⚠ SHARED INSTANCE — see below.
+_cache_ts = 0.0
+
+
+def invalidate() -> None:
+    """Drop the cached map, so the next caller rebuilds it.
+
+    Registered as a `vendors` post-ingest hook: that table is DROP+RENAMEd on
+    every ingest, so the moment it changes is exactly when this map is stale.
+    """
+    global _cache, _cache_ts
+    _cache = None
+    _cache_ts = 0.0
+
+
 async def unique_map(pg, logger=None) -> dict:
     """{lower(trim(name)): supplier_id} for names resolving to EXACTLY ONE id.
 
@@ -64,10 +112,27 @@ async def unique_map(pg, logger=None) -> dict:
 
     ⚠ Degrades to `{}` rather than raising: an unresolvable supplier id must cost
     a hyperlink, never a page.
+
+    ⚠⚠ THE RETURNED DICT IS THE CACHED INSTANCE, NOT A COPY. Callers read it
+    (`vendor_ids.get(key(name))`) and must never mutate it, or they corrupt every
+    later caller's map. Copying 36,563 entries on each of three calls per request
+    would give back a slice of what the cache just saved, so the sharing is
+    deliberate and a guard pins that no call site writes to it.
     """
+    global _cache, _cache_ts
+    if _cache is not None and (time.time() - _cache_ts) < _CACHE_TTL:
+        return _cache
     try:
-        return from_rows(await pg.select_safe(SQL))
+        fresh = from_rows(await pg.select_safe(SQL))
     except Exception as exc:  # noqa: BLE001
         if logger:
             logger.warning("vendor id lookup failed: %s", exc_str(exc))
+        # ⚠⚠ A FAILURE IS NEVER CACHED. Caching `{}` here would turn one blip
+        # into an hour with no vendor hyperlink anywhere on the site, and it
+        # would look exactly like "no name resolves" — the empty-result-reads-as-
+        # data failure this repo keeps paying for. Leave the cache alone so the
+        # next caller retries.
         return {}
+    _cache = fresh
+    _cache_ts = time.time()
+    return _cache

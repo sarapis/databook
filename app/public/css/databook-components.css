@@ -34,7 +34,34 @@ a:hover { color: var(--db-link-hover); text-decoration: underline; }
 .db-page-lead { font-size: var(--db-text-md); color: var(--db-text-muted); line-height: var(--db-leading-relaxed); max-width: 70ch; margin: 4px 0 0; }
 
 /* Contents / table-of-contents sidebar (profile pages) + anchor offset */
-.db-anchor { scroll-margin-top: calc(var(--db-header-h) + var(--db-submenu-h) + var(--db-space-3)); }
+/* ⚠ ONE OWNER FOR THE ANCHOR OFFSET, and it is the SCROLL CONTAINER, not the
+   target. The analysis bar is the only thing on this site that actually pins
+   (see .db-chrome below), so it is the only height an in-page jump has to
+   clear -- and it must be cleared for EVERY anchor, including the ones that
+   never opted into .db-anchor, which is most of them (the Products page's whole
+   jump strip). scroll-padding-top on the container covers all of them with no
+   per-element opt-in, and gates itself on the bar being open, so a page without
+   one gets no padding because nothing covers its anchors.
+   ⚠ .db-anchor therefore no longer declares its own scroll-margin: the two ADD,
+   so on an analysis page they would overshoot. The class is kept so existing
+   markup and any JS hooks stay put. Its old 108px reserved room for chrome that
+   has never stuck, which left those anchors landing ~108px low; flush is the
+   improvement, not a regression.
+   ⚠ The three .db-anchor pages inside /procurement (contract, solicitation and
+   vendor profiles) render the bar CLOSED, so they get 0 padding until a reader
+   opens it -- at which point :has() starts matching live and they get 56px. */
+/* ⚠⚠ THE OFFSET FOLLOWS WHATEVER ACTUALLY PINS, AND THAT IS NOW TWO CASES.
+   With the chrome pinned site-wide, an in-page jump on ANY page lands under
+   56 + 44 of navy unless the scroll container reserves it -- so the default
+   reserves both bars. On an analysis page only the 41px bar is left on screen
+   (the wrapper is pinned at minus the other two), so reserving 100 there would
+   overshoot by exactly the two bars that are no longer covering anything. */
+html {
+  scroll-padding-top: calc(var(--db-header-h) + var(--db-submenu-h) + var(--db-space-2));
+}
+html:has(.db-analysis-bar:not([hidden])) {
+  scroll-padding-top: calc(var(--db-subsubmenu-h) + var(--db-space-2));
+}
 .db-toc { position: sticky; top: calc(var(--db-header-h) + var(--db-submenu-h) + var(--db-space-2)); }
 .db-toc-title { font-size: var(--db-text-2xs); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); color: var(--db-text-muted); font-weight: var(--db-weight-bold); padding: 0 var(--db-space-15); margin-bottom: var(--db-space-1); }
 .db-toc a { display: flex; align-items: center; justify-content: space-between; gap: var(--db-space-1); padding: var(--db-space-1) var(--db-space-15); font-size: var(--db-text-sm); color: var(--db-text-muted); border-left: 3px solid transparent; }
@@ -53,6 +80,63 @@ a:hover { color: var(--db-link-hover); text-decoration: underline; }
 .db-disclaimer .db-disclaimer-close:hover { color: var(--db-on-dark); }
 
 /* ---- 2. GLOBAL NAV BAR --------------------------------------------------- */
+/* ⚠⚠ THE SITE CHROME STICKS AS ONE BLOCK, AND THAT IS NOT A STYLE CHOICE.
+   `.db-header` and `.db-submenu` have declared `position: sticky` since the
+   design system landed and NEITHER HAS EVER STUCK: layout.blade.php wraps them
+   in a <header> that is exactly their combined height, and a sticky box can
+   only move relative to its parent, so there was no travel to move through.
+   Measured 2026-09-15 on both local and prod: scrolled 1014px, all three bars
+   sat at bottom -845, i.e. gone. Sticking the WRAPPER gives them the travel.
+   ⚠ Keep the children's own sticky rules: they are what orders the bars when
+   the analysis bar renders, and deleting them is a second change, not a tidy. */
+/* ⚠⚠ THE NEGATIVE OFFSET IS THE WHOLE TRICK, AND IT IS NOT A HACK.
+   We want the masthead and the Procurement bar to scroll away and ONLY the
+   analysis bar to pin. The bar cannot do that itself: it is a child of this
+   wrapper, a sticky box can only travel inside its parent, and this wrapper is
+   exactly the height of the bars it holds -- zero travel. So the WRAPPER sticks,
+   pinned at minus the height of the two bars above the analysis bar. The chrome
+   slides up until only its last 41px is left, sitting at top 0.
+   ⚠ It depends on the analysis bar being the wrapper's LAST laid-out child.
+   Measured: .db-chrome is 141px = 56 + 44 + 41 exactly, so nothing else (no
+   breadcrumb) renders inside it on these pages. Put anything after the bar and
+   the offset silently points at the wrong element.
+   ⚠ Gated on the bar being present, so every other page keeps the behaviour it
+   has today -- the masthead does not pin. Where :has() is unsupported nothing
+   pins at all, which is also today's behaviour, so it degrades to the status quo
+   rather than to something broken. */
+/* ⚠⚠ THE DEFAULT NOW PINS THE CHROME, WHICH IS WHAT THE CHILDREN ALWAYS SAID
+   THEY DID. `.db-header { top: 0 }` and `.db-submenu { top: var(--db-header-h) }`
+   were written to stack and pin; the wrapper being exactly their height is the
+   only reason they never could. Measured across seven page families 2026-09-15:
+   header top went to -1074 / -1035 / -1034 / -954 at scroll ~1100, i.e. gone
+   everywhere. ⭐ The corroboration that this was always the intent is elsewhere
+   in this file: `.db-toc` and `.db-facets` offset themselves by
+   `--db-header-h + --db-submenu-h`, an offset that only makes sense against a
+   chrome that pins — they have been reserving room for a bar that was not there.
+   ⚠ /notices reads as "sticks" on a naive probe and does NOT: its document is
+   906px against a 900px viewport, so the page cannot scroll. Check the scrollY
+   you actually achieved before believing a sticky measurement. */
+.db-chrome {
+  position: sticky;
+  top: 0;
+  z-index: var(--db-z-header);
+}
+/* The analysis section keeps VARIANT B: only its own bar pins, and the two bars
+   above it scroll away. Same wrapper, a different offset -- see below. */
+.db-chrome:has(.db-analysis-bar:not([hidden])) {
+  top: calc(-1 * (var(--db-header-h) + var(--db-submenu-h)));
+}
+/* ⚠⚠ AND THE TWO BARS ABOVE MUST BE TAKEN OUT OF STICKY, OR THEY COVER THE ONE
+   THAT IS SUPPOSED TO PIN. They have always declared sticky and it has always
+   been inert -- no travel inside a parent their own height. Making the parent
+   move GIVES them travel, and they immediately used it: measured, the masthead
+   slid from -100 down to top -15 / bottom 41 and painted over the analysis bar
+   at 1030 against 1020, so the scrolled page showed the navy masthead pinned
+   and no orange bar at all. Static keeps them in flow, scrolling away with the
+   wrapper, which is the whole point of this variant. */
+.db-chrome:has(.db-analysis-bar:not([hidden])) .db-header,
+.db-chrome:has(.db-analysis-bar:not([hidden])) .db-submenu { position: static; }
+
 .db-header {
   background: var(--db-primary); color: var(--db-text-on-navy);
   height: var(--db-header-h); position: sticky; top: 0; z-index: var(--db-z-header);
@@ -92,8 +176,19 @@ a:hover { color: var(--db-link-hover); text-decoration: underline; }
 .db-suggest-meta { font-size: var(--db-text-xs); color: var(--db-text-muted); line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-nav-toggle { display: none; background: none; border: 0; color: var(--db-text-on-navy); font-size: 22px; padding: 0 var(--db-space-1); cursor: pointer; margin-left: auto; align-items: center; }
 
-/* Responsive nav — collapses to a slide-in drawer below the lg breakpoint. */
-@media (max-width: 991.98px) {
+/* Responsive nav — collapses to a slide-in drawer below the width at which the
+   header's own content fits.
+   ⚠⚠ THAT WIDTH IS MEASURED, NOT BOOTSTRAP'S `lg`. This was 991.98 and the
+   desktop header needs **1228px**: brand 163 + nav 825 + search 180 + gaps. So
+   from 992 to 1227 the drawer was gone, the full nav was shown, and every page
+   on the site scrolled sideways by up to 236px — measured on `/`, `/procurement`
+   and the Digital Services pages alike. It was invisible below 992 only because
+   this block's own `overflow-x: clip` was containing it.
+   Two bands now, each from the sweep: under 1024 the bare nav does not fit
+   either (it needs 1024 with the search box gone), so that is the drawer's
+   breakpoint; 1024 to 1227 keeps the inline nav and drops the search box, which
+   is the trade this header already made below 992 rather than a new one. */
+@media (max-width: 1023.98px) {
   html, body { overflow-x: clip; }   /* contain the off-canvas nav drawer without breaking sticky (clip, NOT hidden) */
   .db-nav-toggle { display: inline-flex; }
   .db-header-search { display: none; }
@@ -101,6 +196,16 @@ a:hover { color: var(--db-link-hover); text-decoration: underline; }
   .db-nav.is-open { transform: translateX(0); }
   .db-nav-link { height: auto; padding: var(--db-space-15) var(--db-space-2); border-bottom: 1px solid rgba(255,255,255,0.08); border-left: 3px solid transparent; }
   .db-nav-link.is-active { background: var(--db-navy-600); border-bottom-color: rgba(255,255,255,0.08); border-left-color: var(--db-accent); }
+}
+
+/* 1024-1227: the nav fits inline, the search box is what does not. ⚠ Hiding it
+   is the SAME decision the drawer block above already makes, extended 204px up
+   the range -- not a new one; /search and the home hero both still reach the
+   federated search. Letting the header WRAP instead would change
+   --db-header-h, which every sticky offset, the TOC and every in-page anchor
+   are measured against. */
+@media (max-width: 1227.98px) {
+  .db-header .db-header-search { display: none; }
 }
 
 /* ---- 3. SUBMENU BAR (one canonical structure for all 11 variants) -------- */
@@ -154,7 +259,42 @@ a:hover { color: var(--db-link-hover); text-decoration: underline; }
 .db-profile-logo img { width: 100%; height: 100%; object-fit: contain; padding: 8px; }
 .db-profile-main { flex: 1 1 auto; min-width: 0; }
 .db-profile-kicker { display: flex; align-items: center; gap: var(--db-space-1); margin-bottom: 4px; }
+/* ⚠⚠ `h1.` IS LOAD-BEARING, AND IT WAS ADDED 2026-09-10 AFTER A MEASUREMENT.
+   `style.css:1582` carries a legacy `.organization_data h1 { font-size: 2rem }`.
+   That rule matched NOTHING on the capital facet pages while they titled
+   themselves with an `<h2>`; giving each page its own `<h1>` woke it, and five
+   titles rendered 32px against the profile's 30px. Specificity, not order, is
+   why: `.organization_data h1` is (0,1,1) and a bare `.db-profile-title` is
+   (0,1,0), so the class lost even though this file loads later.
+   ⚠ The legacy rule is NOT fossil — it is live on nine unrelated pages
+   (person, notices, council, the district sections, orgproject, …), so deleting
+   it would resize titles across the site. Qualifying the class instead keeps
+   this change inside the capital section, which is where it was asked for. */
+h1.db-profile-title,
 .db-profile-title { font-size: var(--db-text-2xl); color: var(--db-primary); font-weight: var(--db-weight-bold); margin: 0 0 4px; line-height: var(--db-leading-tight); }
+/* ⚠ A LONG PROJECT TITLE IS THREE LINES AT PHONE WIDTH. Measured on the capital
+   project profile: `GI - GREEN INFRASTRUCTURE IN OH-015 GRAVESEND BAY…` at 390px
+   was 138px on its own, over a fifth of everything above the key-facts strip.
+   24px instead of 30px is the same decision the desktop rule already makes
+   against the 36px `h1` default — reduce the SIZE, never transform the case:
+   `CSO`, `OH-015` and `GI` are the City's own tokens.
+   ⚠⚠ AND IT LIVES HERE, NOT IN `responsive.css`, WHICH IS WHY THE FIRST ATTEMPT
+   SILENTLY DID NOTHING. `responsive.css` is loaded BEFORE this file (checked in
+   the rendered `<head>`, not assumed), so an equally-specific rule there loses
+   to the line above it and the measurement did not move by a single pixel. A
+   media query is not more specific than the rule it means to override. */
+@media (max-width: 575.98px) {
+  /* ⚠⚠ `h1.` HERE TOO, AND FOR A REASON I REPRODUCED RATHER THAN READ.
+     Qualifying the base rule above to beat `.organization_data h1` made
+     it (0,1,1) and left THIS at (0,1,0) — so the mobile size silently
+     stopped applying and the profile's title went 24px -> 30px at 390.
+     Measured by reverting the one line, not reasoned about. The comment
+     directly above this block already says a media query is not more
+     specific than the rule it overrides; this is that, from the other
+     side. Keep the two selectors' specificity EQUAL. */
+  h1.db-profile-title,
+  .db-profile-title { font-size: var(--db-text-xl); }
+}
 .db-profile-subtitle { color: var(--db-text-muted); font-size: var(--db-text-sm); margin: 0; }
 .db-profile-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--db-space-1); }
 .db-profile-meta { display: flex; flex-wrap: wrap; gap: var(--db-space-1) var(--db-space-3); margin-top: var(--db-space-2); font-size: var(--db-text-xs); color: var(--db-text-muted); }
@@ -163,7 +303,16 @@ a:hover { color: var(--db-link-hover); text-decoration: underline; }
 .db-profile-meta .db-meta-item strong { color: var(--db-text); font-weight: var(--db-weight-semibold); }
 
 /* ---- 6. STAT / METRIC CARD ----------------------------------------------- */
-.db-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--db-space-2); }
+/* ⚠⚠ 165px, NOT 150px, AND `overflow-wrap: anywhere` ON THE VALUE — because
+   `.db-stat` is `overflow: hidden` and a 150px column CLIPS a 30px-bold value
+   at very ordinary content. Measured on the capital project profile: `$105.7M`
+   cut by 4px, `Not published` by 8px, `Construction Procurement` by far more.
+   ⭐ Every geometry and DOM check passed on all of them — the elements existed,
+   were the right size, and held the right text. Overflow is invisible to those,
+   and it was found by LOOKING at the render. `overflow-wrap` makes a long value
+   WRAP instead of vanishing, which is the failure direction that matters: a
+   clipped number is a wrong number. */
+.db-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: var(--db-space-2); }
 .db-stat {
   background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius);
   padding: var(--db-space-2); position: relative; overflow: hidden;
@@ -171,7 +320,21 @@ a:hover { color: var(--db-link-hover); text-decoration: underline; }
 .db-stat::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--db-accent); opacity: 0; transition: opacity var(--db-transition); }
 .db-stat.is-accent::before { opacity: 1; }
 .db-stat-label { font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); color: var(--db-text-muted); display: flex; align-items: center; gap: 5px; }
-.db-stat-value { font-size: var(--db-text-2xl); font-weight: var(--db-weight-bold); color: var(--db-primary); line-height: 1.1; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.db-stat-value { font-size: var(--db-text-2xl); font-weight: var(--db-weight-bold); color: var(--db-primary); line-height: 1.1; margin-top: 4px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+/* ⚠⚠ A TILE WHOSE VALUE IS PROSE, NOT A FIGURE — and the default clipped it.
+   `.db-stat` is `overflow: hidden` and `.db-stat-value` is 30px bold, which is
+   right for `$94.9M` and wrong for `Construction Procurement`: at a 150px grid
+   minimum that phase rendered as "Constructio / Procuremer", visibly cut off on
+   BOTH lines. ⭐ Found by LOOKING at the render — every geometry and DOM check
+   passed, because the element existed, was the right size, and contained the
+   right text. Overflow is invisible to all of them.
+   ⚠ The phase is the City's own vocabulary (`Construction Procurement`,
+   `(On-Hold)`), so it wraps and breaks rather than being truncated with an
+   ellipsis or abbreviated — a shortened phase name is a different phase. */
+.db-stat.is-text .db-stat-value {
+  font-size: var(--db-text-lg); line-height: 1.25;
+  overflow-wrap: anywhere; font-variant-numeric: normal;
+}
 .db-stat-value.is-loading { color: transparent; border-radius: var(--db-radius-sm); background: linear-gradient(90deg, var(--db-gray-100) 25%, var(--db-gray-200) 50%, var(--db-gray-100) 75%); background-size: 200% 100%; animation: dbShimmer 1.3s infinite; width: 70%; }
 .db-stat-sub { font-size: var(--db-text-2xs); color: var(--db-text-muted); margin-top: 2px; }
 .db-stat-delta { font-size: var(--db-text-2xs); font-weight: var(--db-weight-semibold); display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; margin-top: 6px; }
@@ -211,10 +374,21 @@ table.db-table.db-table-striped tbody tr:nth-child(even):hover { background: var
    class "db-table" to the <table>, then drive layout with the `dom` string in
    Engineering Notes; these rules skin DataTables' generated nodes to match. */
 .dataTables_wrapper { background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); overflow: hidden; }
+/* ⚠ CARD INSIDE A CARD. `.db-table-wrap` above carries the SAME border, radius
+   and background as `.dataTables_wrapper`, so a DataTable inside one rendered a
+   double 1px frame with a doubled 8px radius — measured on all 24 tagged tables
+   that sit in a wrap. The outer element is the card; the generated wrapper is
+   plumbing and should be invisible.
+   ⚠ Scoped, not global: the four web-estate tables on a product family page are
+   NOT inside a wrap, and there the generated wrapper is the only frame they get. */
+.db-table-wrap .dataTables_wrapper { background: transparent; border: 0; border-radius: 0; }
+/* The strips are the card's own edges once nested, so drop the doubled rules. */
+.db-table-wrap .dataTables_wrapper .db-table-toolbar { border-bottom: 1px solid var(--db-border); }
+.db-table-wrap .dataTables_wrapper .db-table-footer { border-top: 1px solid var(--db-border); }
 .dataTables_wrapper .db-table-toolbar, .dataTables_wrapper .db-table-footer { background: var(--db-white); }
 .dataTables_wrapper .dataTables_filter { margin: 0; }
 .dataTables_wrapper .dataTables_filter label { font-size: 0; display: inline-flex; align-items: center; }
-.dataTables_wrapper .dataTables_filter input { margin: 0; font-size: var(--db-text-sm); padding: 7px 11px 7px 11px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); min-width: 220px; }
+.dataTables_wrapper .dataTables_filter label:not(.db-search) input { margin: 0; font-size: var(--db-text-sm); padding: 7px 11px 7px 11px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); min-width: 220px; }
 .dataTables_wrapper .dataTables_filter input:focus { outline: none; border-color: var(--db-accent); box-shadow: var(--db-shadow-focus); }
 .dataTables_wrapper .dataTables_length { font-size: var(--db-text-xs); color: var(--db-text-muted); }
 .dataTables_wrapper .dataTables_length select { font-size: var(--db-text-xs); padding: 4px 8px; border: 1px solid var(--db-border-strong); border-radius: var(--db-radius-sm); margin: 0 4px; }
@@ -224,13 +398,89 @@ table.db-table.db-table-striped tbody tr:nth-child(even):hover { background: var
 .dataTables_wrapper .dataTables_paginate .paginate_button:hover { background: var(--db-navy-050) !important; border-color: var(--db-border) !important; color: var(--db-link-hover) !important; }
 .dataTables_wrapper .dataTables_paginate .paginate_button.current { background: var(--db-primary) !important; color: var(--db-on-dark) !important; border-color: var(--db-primary) !important; }
 .dataTables_wrapper .dataTables_paginate .paginate_button.disabled { color: var(--db-gray-400) !important; pointer-events: none; }
+
+/* ---- 7c. PAGINATION (Bootstrap .pagination, skinned to match) ------------
+   ⚠⚠ ONE PAGER LOOK, TWO MECHANISMS. Most tables in the Digital Services
+   section page client-side through DataTables (skinned above). Three page
+   SERVER-side — the renewal queue, the all-technology index and top vendors —
+   because they sort across the whole set rather than the visible slice, and
+   those emit Bootstrap's `.pagination`. Measured side by side before this
+   existed: grey pills, 4px radius, 14px, against white buttons, 6px radius,
+   12px with a navy current page. Two pagers in one section that look unrelated.
+
+   ⚠ There was NO `db-*` pagination rule anywhere — Bootstrap's default was
+   doing the work site-wide. So this is an opt-in class, not a restyle of
+   `.pagination`: `/projects` and the agency profile also use that component and
+   are not this section's to change. They can adopt `db-pagination` later.
+   ⚠ `pagination-sm` is dropped at the call sites rather than fought: it is the
+   same specificity as these rules, so the winner would be decided by file
+   order — true today, and a silent flip the first time anyone reorders a link. */
+.db-pagination { display: inline-flex; gap: 2px; margin: 0; }
+.db-pagination .page-item { margin: 0; }
+.db-pagination .page-link {
+    min-width: 32px; height: 32px; padding: 0 10px;
+    font-size: var(--db-text-xs); color: var(--db-link);
+    border: 1px solid var(--db-border); background: var(--db-white);
+    border-radius: var(--db-radius-sm);
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.db-pagination .page-link:hover { background: var(--db-navy-050); color: var(--db-link-hover); text-decoration: none; }
+/* ⚠ Bootstrap rounds the OUTER corners of the first and last items to join the
+   buttons into one pill — at (0,3,0), which outranks the rule above at (0,2,0).
+   Measured: Previous read 8px/4px and Next 4px/8px against a uniform 4px on the
+   DataTables pager, so the two still differed after being "matched". These
+   buttons are separated by a 2px gap, so a joined pill is the wrong shape here
+   anyway. Same specificity, later file, therefore this wins. */
+.db-pagination .page-item:first-child .page-link,
+.db-pagination .page-item:last-child .page-link { border-radius: var(--db-radius-sm); }
+.db-pagination .page-link:focus-visible { box-shadow: var(--db-shadow-focus); outline: none; }
+.db-pagination .page-item.disabled .page-link { color: var(--db-gray-400); background: var(--db-white); pointer-events: none; }
+
+/* ⚠ NUMBERED BUTTONS DO NOT FIT A PHONE. Measured at 390px on Master
+   Agreements (19 pages): the footer wrapped to 129px — three rows of buttons
+   under a table. Previous / current / Next is the whole control a thumb needs,
+   and the count beside it already says where you are. Applies to BOTH pagers,
+   which is the point of them sharing a look.
+   ⚠ `.current` is kept deliberately: dropping it too would leave Previous and
+   Next with nothing between them and no sign of which page you are on. */
+@media (max-width: 575.98px) {
+    .db-pagination .page-item:not(:first-child):not(:last-child) .page-link,
+    .dataTables_wrapper .dataTables_paginate .paginate_button:not(.previous):not(.next):not(.current) {
+        display: none;
+    }
+    .dataTables_wrapper .dataTables_paginate .ellipsis { display: none; }
+}
+
+/* ⚠ The generated search box REUSES `.db-search` rather than restating its
+   look — same component the rest of the site uses, so it cannot drift. The
+   bridge rule below therefore has to step aside where that class is applied;
+   it still governs every other DataTable in the app that does not use it. */
+.dataTables_wrapper .dataTables_filter label.db-search { font-size: var(--db-text-sm); }
+/* ⚠ (0,3,1) — high enough to beat style.css AND datatables.min.css, which both
+   claim this input at (0,2,1). It restates no VALUES: both properties read the
+   component's own custom properties, so `.db-search` stays the single owner of
+   what a search box looks like. */
+.dataTables_wrapper .dataTables_filter label.db-search input {
+    min-width: 0; padding: var(--search-pad); border-radius: var(--search-radius);
+    /* datatables.min.css sets `border: 1px solid #aaa` here — rgb(170,170,170)
+       against the component's rgb(198,202,205). Measured, not assumed. */
+    border: var(--search-border); background: var(--search-bg);
+}
 table.dataTable.db-table { border-collapse: collapse !important; }
 table.dataTable.db-table thead th.sorting::after, table.dataTable.db-table thead th.sorting_asc::after, table.dataTable.db-table thead th.sorting_desc::after { color: var(--db-primary); }
 
 /* ---- 8. SEARCH + AUTOCOMPLETE -------------------------------------------- */
-.db-search { position: relative; display: inline-flex; align-items: center; width: 100%; max-width: 360px; }
+/* ⚠ The padding and radius are component-local custom properties, NOT design
+   tokens (no `--db-` prefix, declared on the component rather than `:root`, so
+   nobody greps them up as palette). They exist because BOTH `style.css` and
+   DataTables' own stylesheet carry `.dataTables_wrapper .dataTables_filter
+   input` at (0,2,1), which outranks `.db-search input` at (0,1,1) — so a filter
+   box wearing this component still rendered at 5px padding / 3px radius, with
+   no room for its icon. The bridge rule further down re-points at these instead
+   of restating the values, so changing the search box here changes it there. */
+.db-search { --search-pad: 8px 12px 8px 34px; --search-radius: var(--db-radius); --search-border: 1px solid var(--db-border-strong); --search-bg: var(--db-white); position: relative; display: inline-flex; align-items: center; width: 100%; max-width: 360px; }
 .db-search .bi-search { position: absolute; left: 12px; color: var(--db-gray-500); font-size: 14px; pointer-events: none; }
-.db-search input { width: 100%; padding: 8px 12px 8px 34px; font-size: var(--db-text-sm); border: 1px solid var(--db-border-strong); border-radius: var(--db-radius); background: var(--db-white); color: var(--db-text); transition: border-color var(--db-transition), box-shadow var(--db-transition); }
+.db-search input { width: 100%; padding: var(--search-pad); font-size: var(--db-text-sm); border: var(--search-border); border-radius: var(--search-radius); background: var(--search-bg); color: var(--db-text); transition: border-color var(--db-transition), box-shadow var(--db-transition); }
 .db-search input:focus { outline: none; border-color: var(--db-accent); box-shadow: var(--db-shadow-focus); }
 .db-typeahead-menu { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--db-white); border: 1px solid var(--db-border); border-radius: var(--db-radius); box-shadow: var(--db-shadow-lg); z-index: var(--db-z-overlay); overflow: hidden; }
 .db-typeahead-item { padding: var(--db-space-1) var(--db-space-2); font-size: var(--db-text-sm); cursor: pointer; display: flex; align-items: center; gap: var(--db-space-1); }
@@ -492,6 +742,20 @@ input.db-input.is-invalid, select.db-input.is-invalid { border-color: var(--db-d
 .db-footer a:hover { color: var(--db-on-dark); }
 .db-footer h6 { color: var(--db-on-dark); text-transform: uppercase; letter-spacing: var(--db-tracking-caps); font-size: var(--db-text-2xs); margin-bottom: var(--db-space-15); }
 .db-footer .db-footer-cols { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: var(--db-space-3); }
+/* ⚠⚠ `1fr` IS `minmax(auto, 1fr)`, SO A TRACK NEVER SHRINKS BELOW ITS CONTENT.
+   The first column holds the newsletter input, whose min-content is ~300px, so
+   at 390 the five tracks totalled 719px inside a 366px box and the four link
+   columns — Sections, Contribute, About, Social, sixteen links — sat off the
+   right edge with nothing to scroll. Measured on every page of the site: the
+   page itself does not scroll sideways, so they were not merely off-screen,
+   they were unreachable. Present since the design-system migration
+   (2026-06-16) and live on production.
+   `minmax(0, …)` is the load-bearing half: repeat(2, 1fr) alone re-floors each
+   track at its own content and blows out again. */
+@media (max-width: 767.98px) {
+    .db-footer .db-footer-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .db-footer .db-footer-cols > div:first-child { grid-column: 1 / -1; }
+}
 .db-footer ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--db-text-sm); }
 .db-footer-legal { border-top: 1px solid rgba(255,255,255,0.14); margin-top: var(--db-space-3); padding-top: var(--db-space-2); display: flex; align-items: center; gap: var(--db-space-2); flex-wrap: wrap; font-size: var(--db-text-2xs); color: var(--db-text-on-navy-muted); }
 .db-footer-legal img { height: 24px; opacity: 0.9; }
@@ -711,6 +975,16 @@ tr.fac-detail > td, tr.child-row > td { background: var(--db-navy-050); }
 @media (max-width: 768px) {
   /* Wide DataTables scroll horizontally instead of clipping */
   .db-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* ⚠⚠ AND THE INNER WRAPPER, OR THE RULE ABOVE IS DEFEATED. The `db-dt` table
+     standard (2026-09-15) inserts `.dataTables_wrapper` INSIDE `.db-table-wrap`,
+     and it inherits `overflow: hidden` from the card styling — so it clips
+     before the outer box can scroll. Measured on /research/digital-reform/data
+     at 390px: five wrappers 472-773px wide inside a 340px box, `overflow-x:
+     hidden`, and NO scrollable ancestor — the right-hand columns, which are the
+     money, were simply unreachable on a phone. A clipped number is a wrong
+     number, and this one could not even be scrolled to. The comment above has
+     always said "instead of clipping"; a later wrapper was quietly clipping. */
+  .db-table-wrap .dataTables_wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   /* Profile header wraps logo/actions below the title; tabs scroll */
   .db-profile-header-top { flex-wrap: wrap; }
   .db-tabs-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -747,7 +1021,7 @@ tr.fac-detail > td, tr.child-row > td { background: var(--db-navy-050); }
     display: inline-flex; align-items: center; gap: 5px;
     font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold);
     text-transform: uppercase; letter-spacing: var(--db-tracking-wide);
-    color: var(--db-brand); background: var(--db-brand-bg);
+    color: var(--db-brand-fg); background: var(--db-brand-bg);
     border: 1px solid var(--db-brand); border-radius: var(--db-radius-pill);
     padding: 2px 10px; vertical-align: middle;
 }
@@ -757,38 +1031,140 @@ tr.fac-detail > td, tr.child-row > td { background: var(--db-navy-050); }
     background: var(--db-brand-wash); border-radius: var(--db-radius);
     padding: var(--db-space-2) var(--db-space-3); margin: var(--db-space-3) 0;
 }
-.db-analysis-banner > .bi { color: var(--db-brand); font-size: 1.15rem; line-height: 1.4; flex: 0 0 auto; }
+.db-analysis-banner > .bi { color: var(--db-brand-fg); font-size: 1.15rem; line-height: 1.4; flex: 0 0 auto; }
 .db-analysis-banner .db-analysis-body { font-size: var(--db-text-sm); color: var(--db-text); }
-.db-analysis-banner .db-analysis-body strong { color: var(--db-brand); }
+.db-analysis-banner .db-analysis-body strong { color: var(--db-brand-fg); }
+/* The Analysis identity as a compact tag (sub/analysis-tag). The summary carries
+   the caveat; hover (desktop) or tap (a <details>, so it works on a phone) opens
+   the full sentence. Tokens only -- this file is fully themed. */
+.db-analysis-tag { position: relative; display: inline-block; margin: 0 0 var(--db-space-1); max-width: 100%; }
+.db-analysis-tag > summary {
+    list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: var(--db-space-1);
+    border: 1px solid var(--db-brand); background: var(--db-brand-wash); color: var(--db-text);
+    border-radius: var(--db-radius-pill, 999px); padding: 2px var(--db-space-2); font-size: var(--db-text-xs);
+}
+.db-analysis-tag > summary::-webkit-details-marker { display: none; }
+.db-analysis-tag > summary .bi, .db-analysis-tag > summary strong { color: var(--db-brand-fg); }
+.db-analysis-tag .db-analysis-tag-hint { color: var(--db-text-muted); }
+.db-analysis-tag .db-analysis-tag-body {
+    position: absolute; z-index: 20; left: 0; top: calc(100% + 4px); width: min(560px, 90vw);
+    background: var(--db-bg); border: 1px solid var(--db-brand); border-left-width: 4px;
+    border-radius: var(--db-radius); box-shadow: var(--db-shadow-md); padding: var(--db-space-2) var(--db-space-3);
+    font-size: var(--db-text-sm); color: var(--db-text);
+}
+@media (hover: hover) {
+    .db-analysis-tag:not([open]):hover .db-analysis-tag-body { display: block; }
+    .db-analysis-tag:not([open]) .db-analysis-tag-body { display: none; }
+}
+@media (max-width: 767.98px) { .db-analysis-tag .db-analysis-tag-body { position: static; width: auto; margin-top: var(--db-space-1); } }
 
-/* Submenu "Digital Services Analysis" dropdown — orange pill toggle. The menu
-   is position:fixed (positioned by JS) so it escapes the submenu bar's
-   overflow-x:auto clipping context. */
+
+/* Submenu "Digital Services Analysis" toggle -- opens the THIRD BAR below the
+   submenu, not a floating menu. The section has six sibling pages, so its nav
+   has to stay on screen while you read; a dropdown that closes on every click
+   made moving between them a two-click round trip. */
 .db-submenu-analysis { display: inline-flex; align-items: center; height: 100%; }
 /* Looks like any other .db-submenu-link, but in the civic-orange wordmark color
-   to signal "Analysis product". Button reset only; sizing/padding/underline come
-   from the shared .db-submenu-link class on the same element. */
-.db-submenu-analysis .db-analysis-toggle {
-    gap: 5px; background: none; border: 0; border-bottom: 2px solid transparent;
-    cursor: pointer; font-family: inherit;
-    color: var(--db-brand); -webkit-appearance: none; appearance: none;
+   to signal "Analysis product". Sizing/padding/underline come from the shared
+   .db-submenu-link class on the same element.
+   ⚠⚠ IT IS A LINK, NOT A TOGGLE, AND THAT IS WHY THE UNDERLINE MEANS ONE THING.
+   It used to be a <button> that opened the bar without navigating, and
+   `.is-active` and `[aria-expanded="true"]` SHARED THIS RULE — so "you are on
+   this page" and "this disclosure is open" rendered as the same 2px border.
+   Measured on /procurement with the bar opened: TWO underlined items, and the
+   orange one had `is-active = false`, so it was purely the open state wearing
+   the current-page treatment. Navigating removes the second meaning entirely
+   rather than restyling it. Do not reintroduce an `[aria-expanded]` selector
+   here; there is no disclosure left to describe. */
+.db-submenu-analysis .db-analysis-link {
+    border-bottom: 2px solid transparent;
+    color: var(--db-brand);
 }
-.db-submenu-analysis .db-analysis-toggle:hover { color: var(--db-brand-hover); }
-.db-submenu-analysis .db-analysis-toggle.is-active,
-.db-submenu-analysis .db-analysis-toggle[aria-expanded="true"] {
+.db-submenu-analysis .db-analysis-link:hover { color: var(--db-brand-hover); }
+.db-submenu-analysis .db-analysis-link.is-active {
     color: var(--db-brand); border-bottom-color: var(--db-brand);
 }
-.db-analysis-menu {
-    position: fixed; display: none; min-width: 230px; background: var(--db-white);
-    border: 1px solid var(--db-border); border-radius: var(--db-radius);
-    box-shadow: var(--db-shadow-lg); padding: var(--db-space-05);
-    z-index: var(--db-z-overlay, 1080);
+
+/* ---- The third bar -------------------------------------------------------
+   Sticks BELOW the header (56) and the submenu (44), so the three stack to
+   140px of chrome. Light, not a third navy slab: two dark bars plus a third
+   reads as a wall, and the light band is also what marks the analysis layer.
+   ⚠ It is a SIBLING of .db-submenu, never a child -- .db-submenu-inner is
+   overflow-x:auto with a fixed height, which would clip and squash it. */
+.db-analysis-bar {
+    background: var(--db-brand-wash);
+    border-bottom: 1px solid var(--db-brand);
+    /* The pinning is done by .db-chrome's negative sticky offset above, not
+       here: inside that wrapper this element has no travel of its own. */
+    z-index: var(--db-z-submenu);
 }
-.db-analysis-menu.is-open { display: block; }
-.db-analysis-menu a {
-    display: block; padding: var(--db-space-1) var(--db-space-15);
-    font-size: var(--db-text-sm); color: var(--db-text);
-    border-radius: var(--db-radius-sm); white-space: nowrap; text-decoration: none;
+.db-analysis-bar[hidden] { display: none; }
+.db-analysis-bar-inner {
+    display: flex; align-items: center; gap: var(--db-space-3);
+    height: var(--db-subsubmenu-h);
+    overflow-x: auto; scrollbar-width: none;
 }
-.db-analysis-menu a:hover { background: var(--db-brand-bg); color: var(--db-brand); }
-.db-analysis-menu a.is-active { background: var(--db-brand-bg); color: var(--db-brand); font-weight: var(--db-weight-semibold); }
+.db-analysis-bar-inner::-webkit-scrollbar { display: none; }
+.db-analysis-bar-title {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: var(--db-text-2xs); font-weight: var(--db-weight-bold);
+    color: var(--db-brand-fg); text-transform: uppercase;
+    letter-spacing: var(--db-tracking-caps);
+    padding-right: var(--db-space-3); border-right: 1px solid var(--db-brand);
+    white-space: nowrap; flex: 0 0 auto;
+}
+.db-analysis-bar-nav { display: flex; align-items: center; gap: var(--db-space-05); height: 100%; }
+.db-analysis-bar-nav a {
+    display: inline-flex; align-items: center; height: 100%;
+    padding: 0 var(--db-space-15); font-size: var(--db-text-xs);
+    font-weight: var(--db-weight-medium); color: var(--db-text);
+    border-bottom: 2px solid transparent; white-space: nowrap; text-decoration: none;
+}
+.db-analysis-bar-nav a:hover { color: var(--db-brand-fg); text-decoration: none; }
+.db-analysis-bar-nav a.is-active {
+    color: var(--db-brand-fg); font-weight: var(--db-weight-semibold);
+    border-bottom-color: var(--db-brand);
+}
+/* At 390px the words "DIGITAL SERVICES ANALYSIS" take half the bar and only
+   "Overview" survives -- measured. The lamp keeps the analysis marker; the
+   toggle directly above already carries the name in full. */
+@media (max-width: 767.98px) {
+    .db-analysis-bar-title { font-size: 0; gap: 0; padding-right: var(--db-space-15); }
+    .db-analysis-bar-title .bi { font-size: var(--db-text-sm); }
+}
+
+/* --------------------------------------------------------------- notes + muted
+   ⚠⚠ A SENTENCE THAT STOPS A READER MISUSING A NUMBER IS NOT DECORATION.
+   Measured on the capital project profile: the three load-bearing caveats —
+   "these six measures are not a funnel", "a Council award names a budget line,
+   not a project", "this series was retired in 2023" — were `small text-muted`,
+   i.e. the SMALLEST and FAINTEST text on a page whose whole claim is that its
+   numbers can be trusted. `.db-note` gives them full body colour and a left
+   rule; `.db-note-small` is for genuinely secondary prose that is still not a
+   caveat.
+   ⚠ `.db-note` deliberately does NOT use `--db-text-muted`. Muting a caveat is
+   the defect. */
+.db-note {
+  font-size: var(--db-text-sm);
+  color: var(--db-text);
+  border-left: 3px solid var(--db-border);
+  padding-left: var(--db-space-1);
+  margin-bottom: var(--db-space-1);
+}
+.db-note-small { font-size: var(--db-text-sm); color: var(--db-text-muted); }
+
+/* The token-backed replacement for Bootstrap's `.text-muted`. See the note on
+   `--db-text-muted` in databook-tokens.css: it is 7.00:1 on white, which is
+   BETTER than the Bootstrap rule it replaces (6.76:1), so adopting the token
+   costs no contrast anywhere. */
+.db-muted { color: var(--db-text-muted); }
+
+.db-text-base { font-size: var(--db-text-base); }
+
+/* ⚠ TOUCH TARGETS. Budget-line links and district badges are 1-3 characters
+   wide and sat at ~19px tall — under every published minimum (WCAG 2.5.8 is
+   24px, Apple and Google both say 44/48). Padded only at phone widths, so the
+   desktop line of "AG-D001, AG-D002, …" does not become a stack of chips. */
+@media (max-width: 767.98px) {
+  .db-tap { display: inline-block; padding: 6px 8px; min-height: 32px; }
+}

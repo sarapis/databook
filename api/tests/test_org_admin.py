@@ -400,10 +400,17 @@ def test_rename_impact_mirrors_the_oce_resolution_sql():
     import inspect
     src = inspect.getsource(org_admin._rename_impact)
     assert "UPPER(TRIM(agency))" in src and "UPPER(TRIM($1))" in src
-    oce = open(os.path.join(os.path.dirname(__file__), '..', 'routers', 'oce.py'),
-               encoding="utf-8").read()
-    assert "UPPER(TRIM(name)) = UPPER(TRIM($1))" in oce, \
-        "oce.py's resolution changed — _rename_impact must follow it"
+    # ⚠⚠ THE PREDICATE MOVED, THE PROPERTY DID NOT. Agency resolution now lives
+    # in modules/agencyalias.resolve_many — it had three spellings and the one
+    # `/oce/agencies` used skipped the curated seed. What must still hold is that
+    # `_rename_impact` folds names the SAME WAY the resolver does, so the count
+    # quoted to a human is the count that would stop matching. The resolver
+    # matches a LIST now (`= ANY($1)`), so the comparison operator differs by
+    # construction and only the FOLD is comparable.
+    alias = open(os.path.join(os.path.dirname(__file__), '..', 'modules',
+                              'agencyalias.py'), encoding="utf-8").read()
+    assert "UPPER(TRIM(name))" in alias and 'UPPER(TRIM(COALESCE("alternate_name"' in alias, \
+        "the resolver's fold changed — _rename_impact must follow it"
 
 
 # ── the UI's origin gate ─────────────────────────────────────────────────────

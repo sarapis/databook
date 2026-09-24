@@ -50,7 +50,7 @@ class BudgetRevenueController extends Controller
         $fy = $request->input('fiscal_year');
         $summary = DatabookAPI::reqOCE('/oce/payroll/summary', 60)
             ?: ['available' => false, 'latest_year' => null, 'totals' => [], 'by_year' => [],
-                'by_agency' => [], 'by_title' => [], 'by_payroll_type' => []];
+                'partial' => [], 'by_agency' => [], 'by_title' => [], 'by_payroll_type' => []];
         $agenciesUrl = '/oce/payroll/agencies?limit=50' . ($fy ? "&fiscal_year={$fy}" : '');
         $agencies = DatabookAPI::reqOCE($agenciesUrl, 60) ?: ['available' => false, 'data' => [], 'total' => 0];
 

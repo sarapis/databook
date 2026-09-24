@@ -12,6 +12,15 @@ import secrets
 # lines via `logging.lastResort`. See modules/applog.py — it carries the
 # measurements and the reason this is one owner rather than a call per module.
 from modules import applog
+# ⚠ The ONE owner of the capital budget-line spelling rule. Five sources
+# punctuate the same line five ways and a raw comparison joins nothing.
+from modules import budgetline
+# ⚠ The ONE owner of the capital slug rule, and of which source table can be
+# counted for which scope dimension (and HOW). Both exist because every source
+# spells these dimensions differently — five punctuations of a budget line, and
+# 124 of 138 category names differing from the spine's by case alone.
+from modules import capitalslug
+from modules import capitalsources
 applog.configure()
 
 from modules import autoload
@@ -36,6 +45,7 @@ from modules import duckpool
 from modules import orgcore
 from modules import searchindexes
 from modules import orgfilter
+from modules import sourcedupes
 # Credential resolution lives in one place — see modules/dbcreds.py.
 from modules import dbcreds
 # The shared machine-to-machine key check — see modules/apikey.py.
@@ -45,10 +55,17 @@ from routers.oce import router as oce_router
 from routers.budget_revenue import router as budget_revenue_router
 from routers.payroll import router as payroll_router
 from routers.nycha import router as nycha_router
+from routers.capital import router as capital_router
+# ⚠ THE SAME FORMATTER THE PROFILE USES, imported rather than re-written. A
+# second spelling of a date format is precisely how this section came to publish
+# two — `_mdy_label`'s own docstring says so. It is underscore-private, which is
+# a smell; the alternative was a fourth implementation, which is worse.
+from routers.capital import _mdy_label as _capital_mdy_label
 from routers.data_pipeline import router as pipeline_router
 from routers.public_v1 import router as public_v1_router
 from routers.search import router as search_router
 from routers.org_admin import router as org_admin_router
+from routers.review import router as review_router
 from routers.licenses import router as licenses_router
 from modules.errfmt import exc_str
 
@@ -183,6 +200,19 @@ select = PostgresModelAsync.select
 import re
 _VALID_TABLE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
+# ⚠⚠ A table name an IMPORT may create. /upload takes it from the CSV url's last
+# path segment and /import-csv from a form field; both reach DDL, a staging-table
+# name and a file path (`/tmp/import_<name>.csv`, `COPY … FROM '<path>'`). Before
+# 2026-09-24 neither was checked, so a credentialed caller could run arbitrary SQL
+# through either. Hyphens stay legal: `nyc-agencies-and-governance-organizations`
+# is a live table, and every use of the name below is double-quoted.
+_IMPORT_TABLE = re.compile(r'^[a-z_][a-z0-9_-]*$')
+
+
+def _import_table_ok(name: str) -> bool:
+    return bool(name) and len(name) <= 63 and bool(_IMPORT_TABLE.match(name))
+
+
 def _safe_table(tbl: str) -> str:
     """Reject anything that isn't a plain SQL identifier, so a table name from
     a URL path can't be used for SQL injection when interpolated into a query.
@@ -198,11 +228,13 @@ app.include_router(oce_router)
 app.include_router(budget_revenue_router)
 app.include_router(payroll_router)
 app.include_router(nycha_router)
+app.include_router(capital_router)
 app.include_router(pipeline_router)
 # Phase 5 — the org register's editing surface. Every route is gated by
 # routers/org_admin.require_editor; see that module for why it authorises on the
 # user row's scope rather than the token's.
 app.include_router(org_admin_router)
+app.include_router(review_router)
 app.include_router(licenses_router)
 
 
@@ -573,6 +605,282 @@ async def get_subdataset_related_to_organization(id: str, tbl: str):
     except (asyncpg.exceptions.UndefinedColumnError, asyncpg.exceptions.UndefinedTableError):
         return []
 
+@app.get('/get/orgs/section-coverage/{tbl}', tags=['Organizations'])
+async def get_section_org_coverage(tbl: str):
+    """How many organizations a dataset covers at all.
+
+    ⚠⚠ WHY THIS EXISTS: AN EMPTY SECTION TABLE IS AMBIGUOUS, and it resolves the
+    reassuring way. The org profile offers every section to every org, so a body
+    the dataset simply does not cover renders an empty table that reads as "this
+    organization has no capital projects" rather than "this dataset does not list
+    organizations like this one".
+
+    The worked example is the Economic Development Corporation. Measured
+    2026-09-02, `capitalprojectsdollarscomp` holds 72,437 rows across just 26
+    managing agencies — the bodies with their own capital budget lines — and EDC
+    is not one, because it is not a City agency: our own register types it
+    "Public Benefit or Development Organization", it appears 0 times as a
+    contracting agency, and its work reaches it as a VENDOR (24 contracts,
+    $12.3B, all from Small Business Services). Its capital tab was empty and
+    silent about why.
+
+    ⚠ This counts DISTINCT mapped orgs, which is the dataset's own universe — not
+    a hardcoded list that would go stale the moment an agency is added.
+    """
+    try:
+        return await select(
+            'SELECT count(DISTINCT "wegov-org-id") AS orgs FROM {}'.format(_safe_table(tbl)),
+            ())
+    except (asyncpg.exceptions.UndefinedColumnError, asyncpg.exceptions.UndefinedTableError):
+        return [{"orgs": 0}]
+
+
+@app.get('/get/orgs/contract-work/{id}', tags=['Organizations'])
+async def get_org_contract_work(id: str):
+    """City work an organization delivers as a VENDOR, not as an agency.
+
+    ⚠⚠ WHY THE ORG PROFILE NEEDS THIS. Every agency-keyed section is empty for a
+    body that is not a City agency, and that emptiness reads as "no activity"
+    rather than "wrong lens". The Economic Development Corporation is the worked
+    example: 0 rows in all three capital tables and 0 contracts AS AN AGENCY, but
+    12 contracts worth $11.2B as a VENDOR, all from Small Business Services.
+    ⚠ 12, not the 24 raw rows — see the dedup note below. I reported 24 twice
+    before deduping, which is the amendment double-count this repo has shipped
+    twice already.
+
+    ⚠ DEDUPED TO CONTRACT GRAIN. `contracts` holds ONE ROW PER AMENDMENT, and the
+    key is `coalesce(contract_id, ctid)` — the spelling #262/#278 established.
+    Keying on contract_id alone collapses every NULL-id row into one; not deduping
+    at all counts amendments as contracts, which has shipped twice here.
+    Amendments RESTATE a total rather than adding to it, so the surviving row is
+    the largest `current_amount`.
+
+    ⚠ EXACT vendor_name from a curated seed, never a LIKE — `%ECONOMIC
+    DEVELOPMENT CORP%` matches seven different organizations.
+    """
+    from modules import orgcontractvendors
+    names = orgcontractvendors.vendor_names_for(id)
+    if not names:
+        return {"rows": [], "available": False}
+    rows = await select("""
+        SELECT DISTINCT ON (coalesce(c.contract_id, 'row:' || c.ctid::text))
+               c.contract_id, c.ctr_id, c.agency, c.contract_title,
+               c.start_date, c.end_date, c.status, c.vendor_name,
+               coalesce(c.current_amount, c.award_amount) AS amount
+        FROM contracts c
+        WHERE upper(trim(c.vendor_name)) = ANY($1)
+        ORDER BY coalesce(c.contract_id, 'row:' || c.ctid::text),
+                 coalesce(c.current_amount, c.award_amount) DESC NULLS LAST
+    """, ([n.upper().strip() for n in names],))
+    # ⚠ `select()` already returns {"rows": [...]}, so wrapping it again produced
+    # {"rows": {"rows": [...]}} and the view's `w.rows` was an object, not an
+    # array — the table silently rendered nothing. Caught by reading the raw
+    # response rather than trusting the shape.
+    return {"rows": (rows or {}).get("rows", []), "available": True,
+            "vendor_names": names}
+
+
+@app.get('/get/orgs/capital-projects-via/{id}', tags=['Organizations'])
+async def get_org_capital_projects_via_text(id: str):
+    r"""Capital projects whose PLAN DESCRIPTION names this organization, from
+    BOTH the current plan and the retired series, unioned at PROJECT grain.
+
+    ⚠⚠ WHY THIS EXISTS. A body that is not a City agency holds no row under its
+    own id — the managing agencies are the ones with their own capital budget
+    lines — so its Capital Projects tab is empty even when it plainly delivers
+    capital work. NYCEDC is the worked example: 0 rows under its id.
+
+    ⚠⚠ A UNION, NEVER A SWAP, AND THE MEASUREMENT IS WHY. For NYCEDC the current
+    plan names 10 projects and the retired series 15, and only **5** are in both
+    — so re-pointing this query at the live table would have silently dropped 10,
+    and leaving it on the retired one hides 5. The union is 20. Each row says
+    which plans it appears in, because "absent from the 2026 plan" is itself
+    information a reader should see rather than have quietly removed.
+
+    ⚠⚠ TWO MONEY COLUMNS, NEVER ONE. They are different measures AND different
+    units at source: `plannedcommit_total` is planned commitment in DOLLARS,
+    while `BUDG_CURR` is a current budget in THOUSANDS (the retired dataset's own
+    description says so, and the page's renderer multiplies by 1000 — carrying
+    that unit across is exactly the 1000x defect this file already paid for).
+    Both are normalised to dollars HERE, once, and the keys are suffixed `_usd`
+    so a later reader cannot re-scale them. They are never added together.
+
+    ⚠ The retired series republishes every project at each of its 14 publication
+    dates — 108 rows for 15 projects — so it is deduped to the NEWEST publication
+    per project. `PUB_DATE` is numeric, so DESC is chronological. Without this the
+    page would count publication events as projects.
+
+    ⚠ `PROJECT_ID` is `character` (blank-padded) while `projectid` is `text`, so
+    every join and dedup key is `btrim()`ed explicitly rather than relying on
+    bpchar comparison semantics to ignore trailing spaces.
+
+    ⚠⚠ WORD BOUNDARY, NEVER A BARE SUBSTRING. `%EDC%` matches **INCLUDEDCITY**
+    (INCLUDED + CITY run together in a DDC scope text) and drags in 11 unrelated
+    road-reconstruction projects — 26 by substring vs 15 with `\mEDC\M`.
+
+    ⚠ TEXT EVIDENCE, NOT AN AUTHORITATIVE LINK, and the page says so. The Plan
+    publishes no contractor field.
+    """
+    from modules import orgprojecttokens
+    token = orgprojecttokens.token_for(id)
+    if not token:
+        return {"rows": [], "available": False}
+    # \m and \M are Postgres word boundaries. The token is validated alphanumeric
+    # in the module, so it cannot carry a regex metacharacter.
+    pattern = r'\m' + token + r'\M'
+    rows = await select("""
+        WITH cur AS (
+          SELECT btrim(projectid) AS pid, btrim(description) AS name,
+                 -- ⚠ `magency` is a numeric CODE, not a name: it is a bare number on
+                 -- all 12,929 rows, and `magencyacro` (the acronym) is populated on
+                 -- every one. Reading the plausibly-named column rendered "126" as the
+                 -- agency of a $52M project. The column name is not the contract.
+                 btrim(coalesce(magencyacro, '')) AS agency,
+                 btrim(coalesce(typecategory, '')) AS category,
+                 btrim(coalesce(ccpversion, '')) AS ccpversion,
+                 btrim(coalesce("wegov-org-id", '')) AS org_id,
+                 CASE WHEN btrim(coalesce(plannedcommit_total, '')) ~ '^[0-9.]+$'
+                      THEN btrim(plannedcommit_total)::numeric END AS planned_commit_usd
+          FROM capitalprojectslist
+          WHERE description ~* $1
+        ), ret AS (
+          SELECT DISTINCT ON (btrim("PROJECT_ID"))
+                 btrim("PROJECT_ID") AS pid, btrim("PROJECT_DESCR") AS name,
+                 btrim(coalesce("MANAGING_AGCY", '')) AS agency,
+                 btrim(coalesce("TYP_CATEGORY_NAME", '')) AS category,
+                 btrim(coalesce("BORO", '')) AS boro,
+                 "PUB_DATE" AS pub_date,
+                 "wegov-org-id"::text AS org_id,
+                 -- ⚠ BUDG_ORIG is `numeric` while BUDG_CURR is text-like and holds
+                 -- '' and '-', so they cannot be guarded the same way: wrapping the
+                 -- numeric one in coalesce(...,'') raises
+                 -- `invalid input syntax for type numeric: ""`.
+                 -- ⚠⚠ SCHEDULE DATES, AND ONLY FROM THIS SIDE. The 2026 plan's
+                 -- mindate/maxdate are NOT the same measure: 12,408 of its 12,929
+                 -- maxdate values fall on 06/01, i.e. fiscal-year plan boundaries,
+                 -- where START_CURR lands on 06/01 only 16% of the time and spreads
+                 -- across 12 month-days. They agree on an exact start for 51 of
+                 -- 6,323 overlapping projects (0.8%), so coalescing them would put
+                 -- two different measures in one column — the same defect the money
+                 -- columns were split to avoid.
+                 -- ⚠ 1899/1900 is a spreadsheet-epoch SENTINEL, 703 rows in one
+                 -- spike, and NYCEDC's GI-EDC carries 12/01/1899. Suppressed here so
+                 -- there is ONE owner for the rule. Deliberately NOT a wider cutoff:
+                 -- the 1930-1939 cluster (138 rows) and the isolated 1983/86/88 dates
+                 -- may well be real, and nothing here evidences otherwise.
+                 CASE WHEN btrim(coalesce("START_CURR", '')) NOT IN ('', '-')
+                       AND right(btrim("START_CURR"), 4) >= '1901'
+                      THEN btrim("START_CURR") END AS start_date,
+                 CASE WHEN btrim(coalesce("END_CURR", '')) NOT IN ('', '-')
+                       AND right(btrim("END_CURR"), 4) >= '1901'
+                      THEN btrim("END_CURR") END AS end_date,
+                 "BUDG_ORIG" * 1000 AS orig_cost_usd,
+                 -- ⚠ `-?` matches the stats endpoint's guard so the COLUMN and the
+                 -- TILE cannot diverge on sign. A no-op today, verified rather than
+                 -- assumed: 0 negative BUDG_CURR and 0 negative BUDG_ORIG in all
+                 -- 72,437 rows.
+                 CASE WHEN btrim(coalesce("BUDG_CURR", '')) ~ '^-?[0-9.]+$'
+                      THEN btrim("BUDG_CURR")::numeric * 1000 END AS budget_usd
+          FROM capitalprojectsdollarscomp
+          WHERE "PROJECT_DESCR" ~* $1 OR "SCOPE_TEXT" ~* $1
+          ORDER BY btrim("PROJECT_ID"), "PUB_DATE" DESC
+        )
+        SELECT coalesce(c.pid, r.pid)          AS project_id,
+               coalesce(c.name, r.name)        AS name,
+               -- ⚠ Retired first HERE ONLY, and only for this column: it carries the
+               -- agency's full name ("DEPT OF SMALL BUSINESS SERVICES") where the
+               -- current plan carries the acronym ("SBS"). Same body either way.
+               -- ⚠ THE RAW STRING IS KEPT AS A FALLBACK, never dropped: it is what
+               -- renders when an org id does not resolve, and losing the agency
+               -- entirely would be worse than showing it unlinked. Retired-first
+               -- here because that side carries the full name where the current plan
+               -- carries an acronym.
+               coalesce(nullif(r.agency, ''), c.agency)     AS agency,
+               -- ⚠⚠ 2026-FIRST FOR THE ID, the opposite of the line above and
+               -- deliberate. #366 measured that `capitalprojectslist` is the correct
+               -- side: of 319 projects whose agency changed inside the retired
+               -- series' own publications, 307 ended up matching the 2026 plan. The
+               -- raw string is only a display fallback, but the id is a CLAIM about
+               -- which agency runs the project and a LINK a reader will follow, so
+               -- it takes the authoritative source.
+               o.id                             AS agency_org_id,
+               coalesce(o.display_name, o.name) AS agency_name,
+               coalesce(nullif(c.category, ''), r.category) AS category,
+               coalesce(r.boro, '')            AS boro,
+               (c.pid IS NOT NULL)             AS in_current,
+               (r.pid IS NOT NULL)             AS in_retired,
+               c.ccpversion                    AS ccpversion,
+               r.pub_date                      AS pub_date,
+               c.planned_commit_usd            AS planned_commit_usd,
+               r.start_date                    AS start_date,
+               r.end_date                      AS end_date,
+               r.orig_cost_usd                 AS orig_cost_usd,
+               r.budget_usd                    AS budget_usd
+        FROM cur c FULL OUTER JOIN ret r ON c.pid = r.pid
+        -- ⚠ The regex guard is required, not defensive: the list table's column
+        -- is TEXT, so one non-numeric value would abort the whole query on ::int.
+        LEFT JOIN wegov_orgs o
+          ON coalesce(nullif(c.org_id, ''), r.org_id) ~ '^[0-9]+$'
+         AND o.id = coalesce(nullif(c.org_id, ''), r.org_id)::int
+        -- ⚠ Ordered by what the table SHOWS. The visible money columns are the
+        -- 2023 series' original and current cost, so ranking by the 2026 plan's
+        -- planned commitment would order rows by a figure no column displays. It
+        -- stays as the tiebreak, which is all it can be for the rows that appear
+        -- only in the 2026 plan and therefore carry no cost at all.
+        ORDER BY coalesce(r.budget_usd, 0) DESC, coalesce(c.planned_commit_usd, 0) DESC
+        LIMIT 10000
+    """, (pattern,))
+    out = (rows or {}).get("rows", [])
+    # ⚠ COUNT WHAT IS SHOWN. The previous version counted distinct projects across
+    # all 14 publication dates (15) while the table rendered only the newest
+    # publication (9), so the note's own figure disagreed with the rows beneath
+    # it. The count is now len(out) by construction — one row per project.
+    return {"rows": out, "available": bool(out), "token": token,
+            "projects": len(out),
+            "in_current": sum(1 for r in out if r.get("in_current")),
+            "in_retired": sum(1 for r in out if r.get("in_retired"))}
+
+@app.get('/get/orgs/current-capital-plan/{id}', tags=['Organizations'])
+async def get_org_current_capital_plan(id: str):
+    """The CURRENT Capital Commitment Plan rows for an organization.
+
+    ⚠⚠ WHY A SECOND TABLE RATHER THAN A REPLACEMENT. The Capital Projects tab is
+    built on `capitalprojectsdollarscomp`, which NYC RETIRED in October 2023 — it
+    is `is_active=false`, carries no socrata_id, has never been ingested, and its
+    newest PUB_DATE is 20231026. So every agency's tab has shown ~3-year-old data.
+    The successor (`capitalprojectslist`, ccpversion fisa_2026, ingested
+    2026-08-25) is live and larger — 12,905 projects against 8,740, 28 orgs
+    against 25.
+
+    ⚠ BUT IT IS NOT A DROP-IN, WHICH IS WHY BOTH TABLES NOW APPEAR. Measured: the
+    live table has NO LAT/LNG/GEO_JSON (the tab's map depends on them), no BORO,
+    no SCOPE_TEXT, no BUDG_ORIG/CURR/DIFF (the "Budget Change %" column), no
+    START/END/DURATION _ORIG/_DIFF (the "Timeline Change" column) and none of the
+    wegov project-type taxonomy. Swapping would have silently deleted the map and
+    five columns from 25 agency pages. No other current table carries them either
+    — capitalcommitmentplan, capitalcommitmentactuals and capitalstrategy were all
+    checked and none has geo, scope or borough.
+
+    ⚠ `plannedcommit_total` is the headline money column because it is the best
+    populated: measured across 12,929 rows, plannedcommit_total > 0 on 9,213,
+    spent_total on 7,118 and commit_total on only 5,158. A zero here is usually
+    REAL rather than missing — EDC's projects are future-dated lump sums starting
+    2026-2031, so they legitimately carry no commitment yet.
+    """
+    return await select("""
+        SELECT ccpversion, projectid, magencyacro, magency, description,
+               typecategory, mindate, maxdate,
+               plannedcommit_total, commit_total, spent_total,
+               spent_total_checkbooknyc
+        FROM capitalprojectslist
+        WHERE "wegov-org-id"::text = $1
+        ORDER BY
+          CASE WHEN plannedcommit_total ~ '^[0-9.]+$'
+               THEN plannedcommit_total::numeric ELSE 0 END DESC
+        LIMIT 10000
+    """, (str(id),))
+
+
 @app.get('/get/orgs/ccmember/{id}', tags=['Organizations'])
 async def get_city_council_member_related_to_organization(id: str):
     return await select("SELECT * FROM ccmembers WHERE \"wegov-org-id\"=$1", (id,))
@@ -608,37 +916,91 @@ async def organization_additional_cost_stats(id: str, fyear: str):
     return await select("SELECT sum(\"TOTAL AMOUNT\"::numeric * 1000) FROM additionalcostsallocation WHERE \"wegov-org-id\"=$1 AND \"FISCAL YEAR\"=$2", (id, fyear))
 
 
-@app.get('/get/orgs/pstats-projects_no/{id}/{pubdate}', tags=['Organizations'])
-async def organization_projects_number_stats(id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
+@app.get('/get/orgs/pstats-union/{id}', tags=['Organizations'])
+async def organization_projects_union_stats(id: str):
+    r"""The eight project stat tiles for an org matched by TEXT, not by org id.
 
-@app.get('/get/orgs/pstats-orig_cost/{id}/{pubdate}', tags=['Organizations'])
-async def organization_projects_original_cost_stats(id: str, pubdate: str):
-    return await select("SELECT sum(\"BUDG_ORIG\") RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
+    ⚠⚠ WHY THE EXISTING TILES ARE BLANK HERE. All eight `pstats-*` endpoints read
+    `capitalprojectsdollarscomp WHERE "wegov-org-id" = $1 AND "PUB_DATE" = $2`.
+    A body with no capital budget line of its own has ZERO rows under its id, and
+    the publication-date selector those tiles read is populated from the very
+    table that came back empty — so the pubdate is the empty string too. Two
+    reasons for nothing, neither of them visible to a reader.
 
-@app.get('/get/orgs/pstats-curr_cost/{id}/{pubdate}', tags=['Organizations'])
-async def organization_projects_current_cost_stats(id: str, pubdate: str):
-    return await select("SELECT sum(cast(REPLACE(\"BUDG_CURR\", ',', '.') as decimal)) RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
+    ⚠⚠ THE DENOMINATOR IS NOT THE UNION, AND THE PAGE MUST SAY SO. Budget and
+    schedule variance exist ONLY in the retired series: the current plan publishes
+    no original-vs-current budget and no start/end variance at all. For NYCEDC
+    that is 15 of the union's 20 projects. `budget_basis` is returned so the page
+    can state the denominator rather than implying these figures cover every row
+    in the table above them.
 
-@app.get('/get/orgs/pstats-over_budg_am/{id}/{pubdate}', tags=['Organizations'])
-async def organization_projects_over_budgets_amount_stats(id: str, pubdate: str):
-    return await select("SELECT -sum(cast(\"BUDG_DIFF\" as decimal)) RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
+    ⚠ `projects_no` is deliberately NOT returned. The page already has that number
+    — it is the length of the union list it just rendered — and computing it a
+    second time here is exactly how the note came to say 15 above a table of 9.
+    One number, one owner.
 
-@app.get('/get/orgs/pstats-long_no/{id}/{pubdate}', tags=['Organizations'])
-async def organization_delayed_projects_number_stats(id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2 AND \"DURATION_DIFF\" <> '-' AND cast(\"DURATION_DIFF\" as decimal) < 0", (id, pubdate))
+    ⚠ Deduped to the NEWEST publication per project, the same rows the union's
+    `budget_usd` column shows, so a reader can add up the column and land on
+    `curr_cost`.
 
-@app.get('/get/orgs/pstats-over_budg_no/{id}/{pubdate}', tags=['Organizations'])
-async def organization_over_budgeted_projects_number_stats(id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2 AND cast(\"BUDG_DIFF\" as decimal) < 0", (id, pubdate))
+    ⚠ MIXED COLUMN TYPES IN ONE TABLE: `BUDG_ORIG` is `numeric` while `BUDG_CURR`,
+    `BUDG_DIFF`, `DURATION_DIFF`, `START_DIFF` and `END_DIFF` are text-like and
+    hold '' and '-'. Guarding them all the same way raises
+    `invalid input syntax for type numeric: ""` on the numeric one.
+    """
+    from modules import orgprojecttokens
+    token = orgprojecttokens.token_for(id)
+    if not token:
+        return {"rows": [], "available": False}
+    pattern = r'\m' + token + r'\M'
+    return await select("""
+        WITH ret AS (
+          SELECT DISTINCT ON (btrim("PROJECT_ID")) *
+          FROM capitalprojectsdollarscomp
+          WHERE "PROJECT_DESCR" ~* $1 OR "SCOPE_TEXT" ~* $1
+          ORDER BY btrim("PROJECT_ID"), "PUB_DATE" DESC
+        )
+        SELECT count(*)                                              AS budget_basis,
+               round(sum("BUDG_ORIG") * 1000)                        AS orig_cost,
+               round(sum(CASE WHEN btrim("BUDG_CURR") ~ '^-?[0-9.]+$'
+                              THEN btrim("BUDG_CURR")::numeric END) * 1000) AS curr_cost,
+               round(-sum(CASE WHEN btrim("BUDG_DIFF") ~ '^-?[0-9.]+$'
+                               THEN btrim("BUDG_DIFF")::numeric END) * 1000) AS over_budg_am,
+               count(*) FILTER (WHERE btrim("BUDG_DIFF") ~ '^-?[0-9.]+$'
+                                  AND btrim("BUDG_DIFF")::numeric < 0)      AS over_budg_no,
+               count(*) FILTER (WHERE btrim("DURATION_DIFF") ~ '^-?[0-9.]+$'
+                                  AND btrim("DURATION_DIFF")::numeric < 0)  AS long_no,
+               count(*) FILTER (WHERE btrim("START_DIFF") ~ '^-?[0-9.]+$'
+                                  AND btrim("START_DIFF")::numeric < 0)     AS late_start_no,
+               count(*) FILTER (WHERE btrim("END_DIFF") ~ '^-?[0-9.]+$'
+                                  AND btrim("END_DIFF")::numeric < 0)       AS late_end_no
+        FROM ret
+    """, (pattern,))
 
-@app.get('/get/orgs/pstats-late_start_no/{id}/{pubdate}', tags=['Organizations'])
-async def organization_late_started_projects_number_stats(id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2 AND \"START_DIFF\" <> '-' AND cast(REPLACE(\"START_DIFF\", ',', '.') as decimal) < 0", (id, pubdate))
-
-@app.get('/get/orgs/pstats-late_end_no/{id}/{pubdate}', tags=['Organizations'])
-async def organization_late_ended_projects_number_stats(id: str, pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"wegov-org-id\" = $1 AND \"PUB_DATE\"=$2 AND \"END_DIFF\" <> '-' AND cast(REPLACE(\"END_DIFF\", ',', '.') as decimal) < 0", (id, pubdate))
+# ⚠⚠ THE EIGHT PER-PUBLICATION-DATE `pstats-*` ENDPOINTS THAT STOOD HERE ARE
+# DELETED (2026-09-10), and so are their citywide and per-district twins below —
+# 24 routes over `capitalprojectsdollarscomp`, the series NYC retired
+# 2023-10-26. Every one served ONE number for ONE publication date:
+# projects_no · orig_cost · curr_cost · over_budg_am · long_no · over_budg_no ·
+# late_start_no · late_end_no.
+#
+# ⭐ THEY WERE PROVED UNUSED BEFORE REMOVAL, not assumed. Their sole callers were
+# the `finStatUrls` / `pstats-*` hydration arrays on the org capital tab, the
+# district capital tab and `/projects`, and all three were deleted when those
+# surfaces moved to the spine (`9516a75`, and the tab migrations before it). A
+# tree-wide scan for each route now finds it in exactly two kinds of place: a
+# COMMENT in `app/` saying the URL was removed, and a GUARD asserting it is
+# absent (`test_district_capital_tab.py` bans `pstats-orig_cost` from the view).
+# Neither is a consumer. Nothing in `app/`, `mcp_server.py`, `routers/`,
+# `chatbot.py`, `public_v1.py` or `scripts/` builds one.
+#
+# ⚠ THE POINT IS NOT TIDINESS — it is `over_budg_am`. That measure is `Amount
+# Over Budget`, the label this section retired for carrying two definitions, and
+# these routes are the last place its arithmetic still lives. A dead endpoint
+# publishing a retired label is a loaded template: the next page written from it
+# republishes the defect, which is what the org capital tab already did for
+# weeks. `/get/orgs/pstats-union/{id}` stays — it is LIVE, it is labelled as the
+# 2023 series on the page, and it serves the whole row in one query.
 
 # ---- time-series stats for organization profile --------
 
@@ -736,9 +1098,10 @@ async def organization_rss_news_feed(id: str):
 async def get_capital_projects_by_year(pubdate: str):
     return await select("SELECT * FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\" = $1", (pubdate, ))
 
-@app.get('/get/capitalprojects/profile/{prjid}', tags=['Capital Projects'])
-async def get_capital_project_profile(prjid: str):
-    return await select("SELECT * FROM capitalprojectsdollarscomp WHERE \"PROJECT_ID\" = $1 order by \"PUB_DATE\" DESC, \"PROJECT_ID\"", (prjid, ))
+# ⚠ The eight citywide `/get/pstats-{measure}/{pubdate}` routes were deleted here
+# 2026-09-10 with their org and district twins — see the note above
+# `# ---- time-series stats for organization profile`. Unused, and the set
+# included `over_budg_am`.
 
 @app.get('/get/capitalprojects/milestones/{prjid}', tags=['Capital Projects'])
 async def get_capital_project_milestones(prjid: str):
@@ -759,13 +1122,61 @@ async def get_capital_project_core(prjid: str):
     Why: Map popup links use maprojid format (e.g. '826WI-298-B') but the DB
     stores PROJECT_ID without the 3-digit agency prefix ('WI-298-B'). Try the
     exact ID first, then fall back to stripping the prefix.
+
+    ⚠⚠ THE COALESCES ARE LOAD-BEARING AND MUST STAY LAST. `SELECT t1.*, t2.*`
+    across a LEFT JOIN emits `wegov-org-id` and `wegov-org-name` TWICE — those
+    are the only two columns the tables share — and `dict(record)` keeps the
+    LAST. So for a project with no row in `capitalprojectslist` the unmatched
+    side's NULL silently overwrote the real org id.
+
+    That id is what the project page resolves its organization from, so the page
+    aborted to the "Databook is briefly unavailable" view: a PERMANENT data
+    condition wearing the costume of a transient outage, on a page that
+    auto-retries forever. Measured before the fix: **2,433 of 8,740 project
+    pages** (28%) could never load. Found from one link on the NYCEDC page.
+
+    ⚠ Appending the coalesces relies on the same last-wins behaviour that caused
+    the bug — which is exactly why it works, and why a guard runs the real
+    function and asserts a non-joining project still resolves its org.
+
+    ⚠⚠ THE COALESCE ORDER IS t2-FIRST, AND IT IS NOW MEASURED RATHER THAN MERELY
+    CONSERVATIVE. The two tables disagree about which agency runs a project on
+    **2,786 of 59,652 joining rows / 525 distinct projects**, and every one of
+    those rows disagrees on the agency NAME too — so it was never an enrichment
+    bug. `capitalprojectslist` (2026) is the CORRECT side:
+
+      · restricted to the newest 2023 publication the disagreement is 232, not 525
+      · agreement with the 2026 plan RISES as the 2023 data gets newer —
+        5,792 of 6,323 at its oldest publication, 6,091 at its newest
+      · of the 319 projects whose agency changed WITHIN the 2023 series' own 14
+        publications, **307 (96%) ended up matching the 2026 plan and 8 moved
+        away** — the retired series is converging on it
+
+    The residual is real-world reassignment to construction-delivery bodies:
+    DDC 110+, Brooklyn Navy Yard 48, Trust for Governors Island 19, and DDC's
+    managed portfolio grows 1,510 -> 2,202 between the two datasets. Neither
+    table has a separate sponsor column and both use DDC as a managing agency at
+    scale, so this is not one table meaning "sponsor" and the other "manager" —
+    it is management genuinely transferring.
+
+    So t2-first is the RIGHT answer, not just the safe one, and t1 fills in only
+    where t2 is NULL.
+
+    ⚠ `t1."wegov-org-id"` is `numeric` and `t2."wegov-org-id"` is `text`, so the
+    cast is required — an uncast coalesce raises
+    `COALESCE types numeric and text cannot be matched` and 500s the endpoint.
+    Casting t1 to text (rather than t2 to numeric) keeps the payload's type
+    exactly what joining projects already return.
+
+    ⚠ Blank-padding is NOT a factor here, measured rather than assumed: the join
+    is `character = text`, and 6,307 projects join with or without btrim.
     """
-    result = await select("SELECT t1.*, t2.* FROM capitalprojectsdollarscomp t1 LEFT JOIN capitalprojectslist t2 ON t1.\"PROJECT_ID\" = t2.\"projectid\" WHERE t1.\"PROJECT_ID\" = $1 order by t1.\"PUB_DATE\" DESC LIMIT 1", (prjid, ))
+    result = await select("SELECT t1.*, t2.*, coalesce(t2.\"wegov-org-id\", t1.\"wegov-org-id\"::text) AS \"wegov-org-id\", coalesce(t2.\"wegov-org-name\", t1.\"wegov-org-name\") AS \"wegov-org-name\" FROM capitalprojectsdollarscomp t1 LEFT JOIN capitalprojectslist t2 ON t1.\"PROJECT_ID\" = t2.\"projectid\" WHERE t1.\"PROJECT_ID\" = $1 order by t1.\"PUB_DATE\" DESC LIMIT 1", (prjid, ))
     if not result.get('rows'):
         # Try stripping 3-digit managing agency prefix (maprojid → projectid)
         stripped = prjid[3:] if len(prjid) > 3 and prjid[:3].isdigit() else prjid
         if stripped != prjid:
-            result = await select("SELECT t1.*, t2.* FROM capitalprojectsdollarscomp t1 LEFT JOIN capitalprojectslist t2 ON t1.\"PROJECT_ID\" = t2.\"projectid\" WHERE t1.\"PROJECT_ID\" = $1 order by t1.\"PUB_DATE\" DESC LIMIT 1", (stripped, ))
+            result = await select("SELECT t1.*, t2.*, coalesce(t2.\"wegov-org-id\", t1.\"wegov-org-id\"::text) AS \"wegov-org-id\", coalesce(t2.\"wegov-org-name\", t1.\"wegov-org-name\") AS \"wegov-org-name\" FROM capitalprojectsdollarscomp t1 LEFT JOIN capitalprojectslist t2 ON t1.\"PROJECT_ID\" = t2.\"projectid\" WHERE t1.\"PROJECT_ID\" = $1 order by t1.\"PUB_DATE\" DESC LIMIT 1", (stripped, ))
     if not result.get('rows'):
         # Fallback: ~6.3K projects live in capitalprojectslist but have no row in
         # the capital-commitment-plan *dollars* dataset (unbudgeted / planning-stage).
@@ -863,38 +1274,6 @@ async def get_minor_capital_project_core(id: str):
 # ---- stats --------
 
 
-@app.get('/get/pstats-projects_no/{pubdate}', tags=['Capital Projects'])
-async def get_capital_projects_number_by_publication_date(pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1", (pubdate,))
-
-@app.get('/get/pstats-orig_cost/{pubdate}', tags=['Capital Projects'])
-async def get_capital_projects_original_cost_by_publication_date(pubdate: str):
-    return await select("SELECT sum(\"BUDG_ORIG\") RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1", (pubdate,))
-
-@app.get('/get/pstats-curr_cost/{pubdate}', tags=['Capital Projects'])
-async def get_capital_projects_current_cost_by_publication_date(pubdate: str):
-    return await select("SELECT sum(cast(REPLACE(\"BUDG_CURR\", ',', '.') as decimal)) RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1", (pubdate,))
-
-@app.get('/get/pstats-over_budg_am/{pubdate}', tags=['Capital Projects'])
-async def get_capital_projects_over_budget_amount_by_publication_date(pubdate: str):
-    return await select("SELECT -sum(cast(\"BUDG_DIFF\" as decimal)) RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1", (pubdate,))
-
-@app.get('/get/pstats-long_no/{pubdate}', tags=['Capital Projects'])
-async def get_delayed_capital_projects_number_by_publication_date(pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1 AND \"DURATION_DIFF\" <> '-' AND cast(\"DURATION_DIFF\" as decimal) < 0", (pubdate,))
-
-@app.get('/get/pstats-over_budg_no/{pubdate}', tags=['Capital Projects'])
-async def get_over_budget_capital_projects_number_by_publication_date(pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1 AND cast(\"BUDG_DIFF\" as decimal) < 0", (pubdate,))
-
-@app.get('/get/pstats-late_start_no/{pubdate}', tags=['Capital Projects'])
-async def get_number_of_capital_projects_with_late_start_by_publication_date(pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1 AND \"START_DIFF\" <> '-' AND cast(REPLACE(\"START_DIFF\", ',', '.') as decimal) < 0", (pubdate,))
-
-@app.get('/get/pstats-late_end_no/{pubdate}', tags=['Capital Projects'])
-async def get_number_of_capital_projects_with_late_end_by_publication_date(pubdate: str):
-    return await select("SELECT count(*) RES FROM capitalprojectsdollarscomp WHERE \"PUB_DATE\"=$1 AND \"END_DIFF\" <> '-' AND cast(REPLACE(\"END_DIFF\", ',', '.') as decimal) < 0", (pubdate,))
-
 
 # ================ Titles =======================
 
@@ -936,7 +1315,13 @@ async def get_subdataset_related_to_civil_title(id: str, tbl: str):
         'nycjobs': 'wegov-service-title-id',
         'civillistactive': 'wegov-service-title-id',
     }
-    col = col_map.get(tbl, 'wegov-service-title-id')
+    # ⚠⚠ `tbl` is interpolated as the FROM relation, so it must be one of these.
+    # Unguarded, `tbl=users WHERE $1<>'' --` read the api's credential table
+    # (found 2026-09-24; tests/test_sql_injection.py). These four are every
+    # table the frontend's TitlesDatasets asks for.
+    if tbl not in col_map:
+        raise HTTPException(status_code=404, detail="Unknown table")
+    col = col_map[tbl]
     # positionschedule and civillistactive don't have wegov-org-id
     order_map = {
         'positionschedule': '"AGENCY NAME"',
@@ -1099,6 +1484,12 @@ DISTRICT_COLUMNS = {
         "budgetrequestsregister": ["Council District"],
         "facilitydb": ["council"],
     },
+    "sd": {
+        # District-grain graduation outcomes (docs/GRADUATION-INGEST-PLAN.md ⚑ B).
+        # ⚠ Declared here rather than left to the view's `f=` fallback, which is
+        # a CLIENT-supplied column name; the map is consulted first.
+        "graduationoutcomes": ["Geographic Subdivision"],
+    },
     "nta": {
         # nyccouncildiscretionaryfunding intentionally absent: its NTA column is
         # 2010-vintage (stores 2010 NTA *names*), incompatible with the 2020 NTAs
@@ -1166,6 +1557,43 @@ async def _district_select(query: str, params: tuple = ()):
     except (asyncpg.exceptions.UndefinedColumnError, asyncpg.exceptions.UndefinedTableError):
         return {"rows": []}
 
+# ⚠⚠ A SECOND, FIXED PREDICATE FOR TABLES THAT STACK SEVERAL GRAINS IN ONE
+# TABLE UNDER ONE KEY COLUMN. `graduationoutcomes` holds School / District /
+# Borough / Charter School / Citywide / Transfer School rows all keyed on
+# `Geographic Subdivision`, and `get_school_section` already carries the
+# equivalent map for the School half.
+#
+# ⚠ Measured 2026-09-21: at District grain the key is a BARE NUMBER (1-32) while
+# every other grain is a DBN, a borough name or "Citywide", so today no district
+# id collides and `Geographic Subdivision='2'` returns 686 rows either way. That
+# is a property of the DATA, not of the schema — the School half DOES collide
+# (54 of 497 DBNs also appear as Transfer School). Filtering explicitly makes the
+# grain a guarantee rather than a coincidence a later publication could remove.
+#
+# ⚠ Values are CONSTANTS declared here, never anything the caller supplies.
+_DISTRICT_FIXED_FILTERS = {
+    'graduationoutcomes': ('Report Category', 'District'),
+}
+
+# ⚠⚠ `tbl` is interpolated as the FROM relation and `f`/`sort` as quoted
+# identifiers, all straight from the URL. Unguarded, `tbl=pg_user WHERE $1<>'' --`
+# read any relation the api role can see, and an embedded `"` in `sort` broke out
+# of its identifier (found 2026-09-24; tests/test_sql_injection.py). The allowlist
+# is every table the frontend's DistDatasets serves plus every mapped table;
+# a test keeps it in step with DistDatasets.php.
+_DISTRICT_TABLES = frozenset({
+    'budgetrequestsregister', 'capital_projects', 'councilstatcases', 'demographics',
+    'facilitydb', 'graduationoutcomes', 'nyccouncildiscretionaryfunding',
+    'scacapitalprojectschedules', 'scademostats', 'schoollocations',
+}) | frozenset(t for m in DISTRICT_COLUMNS.values() for t in m)
+
+
+def _ident_body(name: str) -> str:
+    """`name` made safe to sit between double quotes: an embedded `"` is doubled,
+    which is how Postgres escapes one inside a quoted identifier."""
+    return name.replace('"', '""')
+
+
 @app.get('/get/districts/{type}/{id}/{tbl}', tags=['Districts'])
 async def get_subdataset_by_administrative_district(type: str, tbl: str, id: str, sort: str=Query(None), f: str=Query(None), limit: int=Query(None, ge=1, le=10000), offset: int=Query(0, ge=0)):
     """Get rows from a table filtered by district type and id.
@@ -1175,12 +1603,14 @@ async def get_subdataset_by_administrative_district(type: str, tbl: str, id: str
     Value formats also differ: facilitydb stores cd as '101', councilstatcases
     stores '01 Manhattan', budgetrequestsregister stores '01'.
     """
+    if tbl not in _DISTRICT_TABLES:
+        raise HTTPException(status_code=404, detail="Unknown table")
     # Determine which column to filter on
     candidates = DISTRICT_COLUMNS.get(type, {}).get(tbl)
     if not candidates:
         if not f:
             return {"rows": [], "error": f"No column mapping for table '{tbl}' with district type '{type}'"}
-        col = f
+        col = _ident_body(f)
     else:
         col = await _resolve_district_column(tbl, candidates)
 
@@ -1188,7 +1618,8 @@ async def get_subdataset_by_administrative_district(type: str, tbl: str, id: str
     order_clause = ""
     if sort and ',' in sort:
         s1, s2 = sort.split(',', 1)
-        order_clause = ' ORDER BY "{}", "{}"'.format(s1.strip().strip('"'), s2.strip().strip('"'))
+        order_clause = ' ORDER BY "{}", "{}"'.format(
+            _ident_body(s1.strip().strip('"')), _ident_body(s2.strip().strip('"')))
 
     # Build pagination clause
     page_clause = ""
@@ -1208,7 +1639,7 @@ async def get_subdataset_by_administrative_district(type: str, tbl: str, id: str
         like_pattern = f"%{boro_name}"
         return await _district_select(
             'SELECT * FROM {} WHERE "{}" LIKE $1 AND (SPLIT_PART("{}", \' \', 1) = $2 OR SPLIT_PART("{}", \' \', 1) = $3){}{}'.format(
-                tbl, col, col, col, order_clause, page_clause),
+                sourcedupes.relation(tbl), col, col, col, order_clause, page_clause),
             (like_pattern, district_num, district_int))
 
     if type == "cd" and len(id) == 3 and tbl in _CD_BOARD_ONLY_TABLES:
@@ -1216,7 +1647,7 @@ async def get_subdataset_by_administrative_district(type: str, tbl: str, id: str
         district_num = id[1:]  # "01"
         district_int = str(int(district_num))  # "1"
         return await _district_select(
-            'SELECT * FROM {} WHERE "{}" = $1 OR "{}" = $2{}{}'.format(tbl, col, col, order_clause, page_clause),
+            'SELECT * FROM {} WHERE "{}" = $1 OR "{}" = $2{}{}'.format(sourcedupes.relation(tbl), col, col, order_clause, page_clause),
             (district_num, district_int))
 
     # Handle cc value format differences
@@ -1227,74 +1658,25 @@ async def get_subdataset_by_administrative_district(type: str, tbl: str, id: str
         padded2 = id.zfill(2)   # "01"
         raw = str(int(id)) if id.isdigit() else id  # "1"
         return await _district_select(
-            'SELECT * FROM {} WHERE "{}" IN ($1, $2, $3){}{}'.format(tbl, col, order_clause, page_clause),
+            'SELECT * FROM {} WHERE "{}" IN ($1, $2, $3){}{}'.format(sourcedupes.relation(tbl), col, order_clause, page_clause),
             (f"NYCC{padded3}", f"NYCC{padded2}", f"NYCC{raw}"))
 
-    return await _district_select('SELECT * FROM {} WHERE "{}"=$1{}{}'.format(tbl, col, order_clause, page_clause), (id,))
+    fixed = _DISTRICT_FIXED_FILTERS.get(tbl)
+    if fixed:
+        fcol, fval = fixed
+        return await _district_select(
+            'SELECT * FROM {} WHERE "{}"=$1 AND "{}"=$2{}{}'.format(
+                sourcedupes.relation(tbl), col, fcol, order_clause, page_clause),
+            (id, fval))
+
+    return await _district_select('SELECT * FROM {} WHERE "{}"=$1{}{}'.format(sourcedupes.relation(tbl), col, order_clause, page_clause), (id,))
 
 
-# ---- stats --------
-
-async def _pstats_select(type: str, query: str, params: tuple = ()):
-    """Run one capital-project stat over the capitalprojects_<type>_idx crosswalk.
-
-    Same guard as /get/districts/{type}/{id}/capitalprojects, which these eight
-    tiles sit alongside on the district page but never inherited:
-
-    * `type` is interpolated into the table name, so it is constrained to a safe
-      charset before any query runs (injection guard). Pass the template with the
-      `{}` still in it — formatting happens here so it cannot happen unguarded.
-    * Crosswalk tables exist for cd/cc/sd; nta has none (2010↔2020 NTA boundaries
-      don't crosswalk), so a missing relation must read as "no value" rather than
-      500. All eight tiles load per page view, so one nta visit raised eight
-      UndefinedTableErrors (Sentry DATABOOK-API-P).
-
-    Returns a single null `res` rather than empty rows, because that is the shape
-    a valid crosswalk with no matching rows already returns and the one the
-    frontend handles — it reads `resp['data'][0]['res'] ?? '-'`, which throws on
-    an empty array and renders `-` on a null.
-    """
-    if not re.fullmatch(r"[a-z]{2,4}", type):
-        return {"rows": [{"res": None}]}
-    try:
-        return await select(query.format(type), params)
-    except (asyncpg.exceptions.UndefinedColumnError, asyncpg.exceptions.UndefinedTableError):
-        return {"rows": [{"res": None}]}
-
-@app.get('/get/districts/pstats-projects_no/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_capital_projects_number_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT count(pp.*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
-
-@app.get('/get/districts/pstats-orig_cost/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_capital_projects_original_cost_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT sum(\"BUDG_ORIG\") RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
-
-@app.get('/get/districts/pstats-curr_cost/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_capital_projects_current_cost_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT sum(cast(REPLACE(\"BUDG_CURR\", ',', '.') as decimal)) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2", (id, pubdate))
-
-@app.get('/get/districts/pstats-over_budg_am/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_capital_projects_overbudget_amount_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT -sum(cast(\"BUDG_DIFF\" as decimal)) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND cast(\"BUDG_DIFF\" as decimal) < 0", (id, pubdate))
-
-@app.get('/get/districts/pstats-long_no/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_delayed_capital_projects_number_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"DURATION_DIFF\" <> '-' AND cast(\"DURATION_DIFF\" as decimal) < 0", (id, pubdate))
-
-@app.get('/get/districts/pstats-over_budg_no/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_number_of_overbudgeted_capital_projects_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND cast(\"BUDG_DIFF\" as decimal) < 0", (id, pubdate))
-
-@app.get('/get/districts/pstats-late_start_no/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_number_of_capital_projects_with_late_start_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"START_DIFF\" <> '-' AND cast(REPLACE(\"START_DIFF\", ',', '.') as decimal) < 0", (id, pubdate))
-
-@app.get('/get/districts/pstats-late_end_no/{type}/{id}/{pubdate}', tags=['Districts'])
-async def get_number_of_capital_projects_with_late_end_by_administrative_district_and_publication_date(type: str, id: str, pubdate: str):
-    return await _pstats_select(type, "SELECT count(*) RES FROM capitalprojectsdollarscomp pp INNER JOIN capitalprojects_{}_idx i ON pp.\"PROJECT_ID\"=i.\"PROJECT_ID\" WHERE i.\"DIST\" = $1 AND \"PUB_DATE\"=$2 AND \"END_DIFF\" <> '-' AND cast(REPLACE(\"END_DIFF\", ',', '.') as decimal) < 0", (id, pubdate))
-
-
-
+# ⚠ The eight `/get/districts/pstats-{measure}/{type}/{id}/{pubdate}` routes and
+# their `_pstats_select` helper were deleted here 2026-09-10 — the helper had no
+# other caller, and leaving a helper whose every caller is gone is how a future
+# reader concludes the endpoints must still exist somewhere.
+# ⚠ `_district_select` is NOT that: it still serves the live district tables.
 
 # ================ notices =======================
 
@@ -1513,7 +1895,9 @@ async def upload_csv_dataset(
         return {'error': 'malformed request'}
     
     tbl = CsvDataset.url2fn(url)
-    
+    if not _import_table_ok(tbl):
+        return JSONResponse(status_code=400, content={'result': 'Fail', 'error': 'invalid table name'})
+
     # Route CROL to async import (too large for sync driver)
     if tbl == 'crol':
         return await import_crol_async(url)
@@ -1539,7 +1923,7 @@ async def upload_csv_dataset(
     
     # Get row count and log success
     try:
-        row_count_result = await select(f"SELECT COUNT(*) as cnt FROM {tbl}")
+        row_count_result = await select(f'SELECT COUNT(*) as cnt FROM "{tbl}"')
         row_count = row_count_result['rows'][0]['cnt'] if row_count_result.get('rows') else None
     except:
         row_count = None
@@ -1547,6 +1931,70 @@ async def upload_csv_dataset(
     await log_ingestion(tbl, url, 'success', row_count=row_count)
     
     return {'result': 'OK', 'table': tbl, 'rows': row_count}
+
+
+def _staging_name(table_name: str) -> str:
+    """`_staging_<table>`, refusing a name Postgres would silently truncate.
+
+    ⚠ Identifiers are capped at 63 bytes and Postgres TRUNCATES rather than
+    erroring, so a long table name would yield a staging name that could collide
+    with another table's — and the collision would surface as one import
+    clobbering another's staging data, which is close to unfindable. Measured
+    2026-09-02: the longest active table name is 30 chars, so this has plenty of
+    headroom and exists only so a future long name fails loudly here instead.
+    """
+    staging = f"_staging_{table_name}"
+    if len(staging.encode()) > 63:
+        raise ValueError(
+            f"staging name for {table_name!r} exceeds Postgres' 63-byte identifier "
+            f"limit and would be silently truncated")
+    return staging
+
+
+async def _swap_staging_into_place(db, table_name: str, staging: str,
+                                   total: int, build_started: float):
+    """ANALYZE the staging table, then swap it over the live one atomically.
+
+    ⚠⚠ ONE SPELLING FOR BOTH IMPORTERS. `import_crol_async` and
+    `import_csv_async` both used to DROP the live table and rebuild it in place,
+    leaving every consumer to see `relation "X" does not exist` or — worse,
+    because it does not raise — a PARTIALLY POPULATED table. Two copies of the
+    swap would be two chances to get it subtly different; this is the one owner.
+
+    ⚠ ANALYZE BEFORE THE SWAP, and it is load-bearing rather than tidy: measured
+    on prod against throwaway tables, a staging table's reltuples and pg_stats
+    rows are IDENTICAL after the rename, because pg_statistic is keyed on the
+    relation OID and RENAME preserves it. So the table is never
+    live-without-statistics — the #199 defect, where a hook reports success while
+    every lookup still seq-scans.
+
+    ⚠ BOTH STATEMENTS IN ONE TRANSACTION. DDL is transactional in Postgres —
+    measured: a rolled-back swap leaves the original table intact with all its
+    rows — so no reader can observe the moment between them. They see the old
+    table or the new one, never neither. That is the entire point.
+
+    ⚠ Indexes are deliberately NOT built here. Their names are schema-unique and
+    declared in data_scheduler.TABLE_INDEXES / modules.searchindexes, so creating
+    them on the staging table would COLLIDE with the live table's; reproducing the
+    naming at the call site would add another declaration site, which #252 exists
+    to prevent. Callers rebuild them after this returns, which is also what the
+    old code did — so the residual "complete but briefly unindexed" window is no
+    worse than before, and strictly better than "missing or partial".
+    """
+    import time
+    await db.execute(f'ANALYZE "{staging}"')
+    swap_started = time.time()
+    async with db.transaction():
+        await db.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        await db.execute(f'ALTER TABLE "{staging}" RENAME TO "{table_name}"')
+    # ⚠ print, NOT logger: main.py defines no logger and `main` is not in
+    # applog.APP_LOGGER_ROOTS, so a logger call here would be a NameError and even
+    # with one its INFO would be dropped (#249). Every progress line in this file
+    # is a bracketed print for the same reason. The duration is recorded because
+    # the log had no start marker, so the size of this window was never known.
+    print(f"[{table_name}] swapped {total} rows into place in "
+          f"{time.time() - swap_started:.3f}s "
+          f"(build took {swap_started - build_started:.1f}s)", flush=True)
 
 
 async def import_crol_async(url: str):
@@ -1557,6 +2005,7 @@ async def import_crol_async(url: str):
     import aiohttp
     import csv
     import asyncpg
+    import time
     
     try:
         # Stream download to file (avoids loading 600MB into memory)
@@ -1593,12 +2042,43 @@ async def import_crol_async(url: str):
         # KeyError here. See modules/dbcreds.py.
         db = await asyncpg.connect(**dbcreds.settings(Config.db))
 
+        # ⚠⚠ BUILD INTO A STAGING TABLE AND SWAP — NEVER DROP THE LIVE ONE.
+        # This used to `DROP TABLE crol` and then spend the whole import
+        # rebuilding it: 1.1M rows / 789 MB of COPY, plus TWO full table
+        # rewrites (the ALTER COLUMN ... TYPE DATE and the event_date_parsed
+        # UPDATE below). For that entire window every consumer saw either
+        # `relation "crol" does not exist` or — worse, because it does not
+        # raise — a PARTIALLY POPULATED table. Sentry caught the first shape
+        # three times at 04:15 on three different days (DATABOOK-API-31); the
+        # second shape is invisible: a notices panel silently renders fewer
+        # notices than exist and a count reads low, which is this repo's
+        # empty-reads-as-data defect at ingest grain.
+        #
+        # Consumers affected: oce.py::_notices_for_epins and related_notices
+        # (the contract page's panel), routers/search.py::_notices (global
+        # search + typeahead), the notice pages, notice_product_links' builder
+        # and the classifier's CROL tier.
+        #
+        # ⚠ THE SWAP IS THE SAME PATTERN THE EXTRACTOR PATH ALREADY USES, which
+        # is why indexes are rebuilt AFTER the rename rather than before: index
+        # names are schema-unique and declared explicitly in
+        # data_scheduler.TABLE_INDEXES, so building them on the staging table
+        # would collide with the live table's. Reproducing the naming here to
+        # dodge that would give crol a fourth declaration site — the exact
+        # sprawl #252 removed. So the window that remains is "complete but
+        # briefly unindexed", which is strictly better than "missing or partial"
+        # AND is no worse than the old code, which also only indexed at the end.
+        staging = _staging_name('crol')
+        build_started = time.time()
         try:
-            # Drop and recreate table
-            await db.execute('DROP TABLE IF EXISTS crol')
-            col_defs = ', '.join([f'"{col}" TEXT' for col in clean_cols])
-            await db.execute(f'CREATE TABLE crol ({col_defs})')
-            
+            # A previous run that died mid-import can leave one behind; it holds
+            # a full copy of the table, so it is dropped rather than reused.
+            await db.execute(f'DROP TABLE IF EXISTS {staging}')
+            # A CSV header is caller data: an embedded `"` is doubled so it cannot
+            # leave its identifier (copy_records_to_table quotes the same way).
+            col_defs = ', '.join(['"{}" TEXT'.format(col.replace('"', '""')) for col in clean_cols])
+            await db.execute(f'CREATE TABLE {staging} ({col_defs})')
+
             # Stream import in batches
             batch_size = 10000
             batch = []
@@ -1610,11 +2090,11 @@ async def import_crol_async(url: str):
                 for row in reader:
                     batch.append(tuple(row))
                     if len(batch) >= batch_size:
-                        await db.copy_records_to_table('crol', records=batch, columns=clean_cols)
+                        await db.copy_records_to_table(staging, records=batch, columns=clean_cols)
                         total += len(batch)
                         batch = []
                 if batch:
-                    await db.copy_records_to_table('crol', records=batch, columns=clean_cols)
+                    await db.copy_records_to_table(staging, records=batch, columns=clean_cols)
                     total += len(batch)
             
             # Convert date columns (only if they exist in the CSV)
@@ -1622,7 +2102,7 @@ async def import_crol_async(url: str):
                 if date_col in clean_cols:
                     try:
                         await db.execute(f"""
-                            ALTER TABLE crol 
+                            ALTER TABLE {staging}
                             ALTER COLUMN {date_col} TYPE DATE USING CASE 
                                 WHEN {date_col} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$' THEN {date_col}::DATE 
                                 ELSE NULL 
@@ -1634,9 +2114,9 @@ async def import_crol_async(url: str):
             # If event_date_parsed not in CSV, create it from EventDate
             # EventDate format: "MM/DD/YYYY HH:MM:SS AM/PM"
             if 'event_date_parsed' not in clean_cols and 'EventDate' in clean_cols:
-                await db.execute('ALTER TABLE crol ADD COLUMN event_date_parsed DATE')
-                await db.execute("""
-                    UPDATE crol SET event_date_parsed = 
+                await db.execute(f'ALTER TABLE {staging} ADD COLUMN event_date_parsed DATE')
+                await db.execute(f"""
+                    UPDATE {staging} SET event_date_parsed = 
                         TO_DATE(SUBSTRING("EventDate" FROM 1 FOR 10), 'MM/DD/YYYY')
                     WHERE "EventDate" != '' AND length("EventDate") >= 10
                 """)
@@ -1663,10 +2143,26 @@ async def import_crol_async(url: str):
             # old behaviour changes — but anything else registered on crol now
             # actually runs. Registering a hook that never fires is worse than
             # having no hook, because the data looks maintained.
+            # ⚠ ANALYZE BEFORE THE SWAP, and it is load-bearing rather than
+            # tidy: pg_statistic rows are keyed on the relation OID and RENAME
+            # preserves the OID, so statistics gathered here SURVIVE the rename
+            # and the table is never live-without-stats. Without it the planner
+            # would treat a 1.1M-row table as empty for the window between the
+            # swap and the post-ingest ANALYZE — the #199 defect, where a hook
+            # reports success while every lookup still seq-scans.
+            await _swap_staging_into_place(db, 'crol', staging, total, build_started)
+
             from data_scheduler import run_post_ingest_hooks
             await run_post_ingest_hooks('crol', db)
             
         finally:
+            # ⚠ A run that died mid-build leaves a full-size copy behind (789 MB
+            # at current volumes). After a SUCCESSFUL swap this is a no-op,
+            # because the staging table no longer exists under that name.
+            try:
+                await db.execute(f'DROP TABLE IF EXISTS {staging}')
+            except Exception:  # noqa: BLE001 — cleanup must never mask the real error
+                pass
             await db.close()
         
         # Cleanup temp file
@@ -1797,6 +2293,8 @@ async def import_csv_async(
     # names the API uses in SELECT queries (Postgres lowercases unquoted
     # identifiers, but double-quoted names are case-sensitive).
     table_name = table_name.lower()
+    if not _import_table_ok(table_name):
+        return JSONResponse(status_code=400, content={'result': 'Fail', 'error': 'invalid table name'})
     """
     Import a CSV file from S3 into a PostgreSQL table using streaming.
     Downloads to disk first, then batch-inserts via COPY to avoid OOM
@@ -1806,6 +2304,7 @@ async def import_csv_async(
     import csv
     import sys
     import os
+    import time
     csv.field_size_limit(sys.maxsize)
     import asyncpg
     
@@ -1855,11 +2354,28 @@ async def import_csv_async(
         # KeyError here. See modules/dbcreds.py.
         db = await asyncpg.connect(**dbcreds.settings(Config.db))
 
+        # ⚠⚠ BUILD INTO A STAGING TABLE AND SWAP — NEVER DROP THE LIVE ONE.
+        # This used to `DROP TABLE "<table>"` and then spend the whole import
+        # rebuilding it, so for that window every consumer saw either
+        # `relation "X" does not exist` or — worse, because it does not raise — a
+        # PARTIALLY POPULATED table, reading fewer rows than exist while a count
+        # came back low. Measured 2026-09-02, this path serves 52 active datasets
+        # including payrolldata (1787 MB) and civillist (725 MB), both LARGER than
+        # crol, and civillist backs people search, person profiles and the org
+        # Employees tab — all public pages.
+        #
+        # Same pattern and the same ONE OWNER as the crol importer above; see
+        # _swap_staging_into_place for why ANALYZE happens before the swap and why
+        # indexes are still rebuilt after it.
+        staging = _staging_name(table_name)
+        build_started = time.time()
         try:
-            # Drop and recreate table
-            await db.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-            col_defs = ', '.join([f'"{col}" TEXT' for col in clean_cols])
-            await db.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
+            # A previous run that died mid-import leaves a full-size copy behind.
+            await db.execute(f'DROP TABLE IF EXISTS "{staging}"')
+            # A CSV header is caller data: an embedded `"` is doubled so it cannot
+            # leave its identifier (copy_records_to_table quotes the same way).
+            col_defs = ', '.join(['"{}" TEXT'.format(col.replace('"', '""')) for col in clean_cols])
+            await db.execute(f'CREATE TABLE "{staging}" ({col_defs})')
             
             # Stream import in batches
             batch_size = 10000
@@ -1873,12 +2389,12 @@ async def import_csv_async(
                     batch.append(tuple(row))
                     if len(batch) >= batch_size:
                         await db.copy_records_to_table(
-                            table_name, records=batch, columns=clean_cols)
+                            staging, records=batch, columns=clean_cols)
                         total += len(batch)
                         batch = []
                 if batch:
                     await db.copy_records_to_table(
-                        table_name, records=batch, columns=clean_cols)
+                        staging, records=batch, columns=clean_cols)
                     total += len(batch)
             
             # CROL-specific post-processing: date columns and indexes
@@ -1887,7 +2403,7 @@ async def import_csv_async(
                     if date_col in clean_cols:
                         try:
                             await db.execute(f"""
-                                ALTER TABLE crol 
+                                ALTER TABLE "{staging}"
                                 ALTER COLUMN {date_col} TYPE DATE USING CASE 
                                     WHEN {date_col} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$' THEN {date_col}::DATE 
                                     ELSE NULL 
@@ -1897,16 +2413,24 @@ async def import_csv_async(
                             pass
 
                 if 'event_date_parsed' not in clean_cols and 'EventDate' in clean_cols:
-                    await db.execute('ALTER TABLE crol ADD COLUMN event_date_parsed DATE')
-                    await db.execute("""
-                        UPDATE crol SET event_date_parsed = 
+                    await db.execute(f'ALTER TABLE "{staging}" ADD COLUMN event_date_parsed DATE')
+                    await db.execute(f"""
+                        UPDATE "{staging}" SET event_date_parsed = 
                             TO_DATE(SUBSTRING("EventDate" FROM 1 FOR 10), 'MM/DD/YYYY')
                         WHERE "EventDate" != '' AND length("EventDate") >= 10
                     """)
 
-                # ⚠ THE SECOND COPY of the same block, now also delegated. See
-                # data_scheduler.TABLE_INDEXES['crol'] — and the note at the other
-                # site for why this calls the hook runner, not the index rebuild.
+
+            await _swap_staging_into_place(db, table_name, staging, total, build_started)
+
+            # ⚠ HOOKS AND INDEXES RUN AFTER THE SWAP, on the real table name. If
+            # they ran before it they would build indexes under the STAGING name,
+            # and the rename would carry those names onto the live table — leaving
+            # the declared names absent and a duplicate set present.
+            # ⚠ THE SECOND COPY of the same block, now also delegated. See
+            # data_scheduler.TABLE_INDEXES['crol'] — and the note at the other
+            # site for why this calls the hook runner, not the index rebuild.
+            if table_name == 'crol':
                 from data_scheduler import run_post_ingest_hooks
                 await run_post_ingest_hooks('crol', db)
 
@@ -1929,6 +2453,13 @@ async def import_csv_async(
             """, table_name, url, 'success', total, None)
             
         finally:
+            # ⚠ A run that died mid-build leaves a full-size copy behind — 1787 MB
+            # for payrolldata. After a successful swap this is a no-op, because the
+            # staging table no longer exists under that name.
+            try:
+                await db.execute(f'DROP TABLE IF EXISTS "{staging}"')
+            except Exception:  # noqa: BLE001 — cleanup must never mask the real error
+                pass
             await db.close()
         
         # Cleanup temp file
@@ -2029,9 +2560,19 @@ async def get_table_stats(
 
 # ---- Schools --------
 
+# ⚠⚠ `schoollocations` IS NOT ONE ROW PER SCHOOL AT SOURCE. The City publishes
+# 2,190 rows for 2,131 schools -- 59 byte-exact repeats -- so a bare count
+# over-reports and every JOIN on `location_code` doubles the joined rows for
+# those buildings. District 18 read 17,803 students against a real 17,051.
+# `modules/sourcedupes` owns the dedupe; these are its two spellings, and no
+# query below may name the raw table instead. See that module for why the fix
+# is here and not in a post-ingest hook.
+_SCHOOL_LOCATIONS = sourcedupes.relation('schoollocations')
+_SCHOOL_LOCATIONS_T2 = sourcedupes.relation('schoollocations', 't2')
+
 @app.get('/get/schools/sdstats/all', tags=['Schools'])
 async def get_schools_global_stats():
-    schools_no = await select('SELECT count(*) as res FROM schoollocations')
+    schools_no = await select(f'SELECT count(*) as res FROM {_SCHOOL_LOCATIONS}')
     students_no = await select('SELECT sum(cast("Org Enroll" as decimal)) as res FROM scaenrollmentcapacity WHERE "Org Enroll" ~ \'^[0-9\\.]+\' AND "Data As Of" = (SELECT max("Data As Of") FROM scaenrollmentcapacity)')
     prj_no = await select('SELECT count(*) as res FROM scaactiveprojects')
     prj_budget = await select('SELECT sum(cast("Project Budget Amount" as decimal)) as res FROM scacapitalprojectschedules WHERE "Project Budget Amount" ~ \'^[0-9\\.]+\'')
@@ -2051,15 +2592,15 @@ async def get_schools_global_stats():
 
 @app.get('/get/schools/all', tags=['Schools'])
 async def get_all_schools():
-    return await select('SELECT * FROM schoollocations')
+    return await select(f'SELECT * FROM {_SCHOOL_LOCATIONS}')
 
 @app.get('/get/schools/sdstats/{id}', tags=['Schools'])
 async def get_school_district_stats(id: str):
-    schools_no = await select('SELECT count(*) as res FROM schoollocations WHERE "Geographical_District_code" = $1', (id,))
-    students_no = await select('SELECT sum(cast("Org Enroll" as decimal)) as res FROM scaenrollmentcapacity t1 JOIN schoollocations t2 ON t1."Bldg ID" = t2."location_code" WHERE t2."Geographical_District_code" = $1 AND "Org Enroll" ~ \'^[0-9\\.]+\' AND "Data As Of" = (SELECT max("Data As Of") FROM scaenrollmentcapacity)', (id,))
-    prj_no = await select('SELECT count(*) as res FROM scaactiveprojects t1 JOIN schoollocations t2 ON t1."Building ID" = t2."location_code" WHERE t2."Geographical_District_code" = $1', (id,))
-    prj_budget = await select('SELECT sum(cast("Project Budget Amount" as decimal)) as res FROM scacapitalprojectschedules t1 JOIN schoollocations t2 ON t1."Project Building Identifier" = t2."location_code" WHERE t2."Geographical_District_code" = $1 AND "Project Budget Amount" ~ \'^[0-9\\.]+\'', (id,))
-    prj_costs = await select('SELECT sum(cast("Total Phase Actual Spending Amount" as decimal)) as res FROM scacapitalprojectschedules t1 JOIN schoollocations t2 ON t1."Project Building Identifier" = t2."location_code" WHERE t2."Geographical_District_code" = $1 AND "Total Phase Actual Spending Amount" ~ \'^[0-9\\.]+\'', (id,))
+    schools_no = await select(f'SELECT count(*) as res FROM {_SCHOOL_LOCATIONS} WHERE "Geographical_District_code" = $1', (id,))
+    students_no = await select(f'SELECT sum(cast("Org Enroll" as decimal)) as res FROM scaenrollmentcapacity t1 JOIN {_SCHOOL_LOCATIONS_T2} ON t1."Bldg ID" = t2."location_code" WHERE t2."Geographical_District_code" = $1 AND "Org Enroll" ~ \'^[0-9\\.]+\' AND "Data As Of" = (SELECT max("Data As Of") FROM scaenrollmentcapacity)', (id,))
+    prj_no = await select(f'SELECT count(*) as res FROM scaactiveprojects t1 JOIN {_SCHOOL_LOCATIONS_T2} ON t1."Building ID" = t2."location_code" WHERE t2."Geographical_District_code" = $1', (id,))
+    prj_budget = await select(f'SELECT sum(cast("Project Budget Amount" as decimal)) as res FROM scacapitalprojectschedules t1 JOIN {_SCHOOL_LOCATIONS_T2} ON t1."Project Building Identifier" = t2."location_code" WHERE t2."Geographical_District_code" = $1 AND "Project Budget Amount" ~ \'^[0-9\\.]+\'', (id,))
+    prj_costs = await select(f'SELECT sum(cast("Total Phase Actual Spending Amount" as decimal)) as res FROM scacapitalprojectschedules t1 JOIN {_SCHOOL_LOCATIONS_T2} ON t1."Project Building Identifier" = t2."location_code" WHERE t2."Geographical_District_code" = $1 AND "Total Phase Actual Spending Amount" ~ \'^[0-9\\.]+\'', (id,))
     
     s_no = students_no['rows'][0]['res'] or 1
     p_costs = prj_costs['rows'][0]['res'] or 0
@@ -2090,7 +2631,7 @@ async def get_global_stats():
 
 @app.get('/get/schools/{id}', tags=['Schools'])
 async def get_school_details(id: str):
-    return await select('SELECT * FROM schoollocations WHERE "location_code" = $1', (id,))
+    return await select(f'SELECT * FROM {_SCHOOL_LOCATIONS} WHERE "location_code" = $1', (id,))
 
 @app.get('/get/schools/section/{id}/{tbl}', tags=['Schools'])
 async def get_school_section(id: str, tbl: str):
@@ -2106,19 +2647,36 @@ async def get_school_section(id: str, tbl: str):
         'scacapitalprojectschedules': 'Project Building Identifier',
         'scaschoolprograms': 'Building ID',
         'scacurrentplan': 'Building ID',
-        'scaaddedprojects': 'Bldg ID'
+        'scaaddedprojects': 'Bldg ID',
+        'graduationoutcomes': 'Geographic Subdivision'
     }
-    
+
+    # ⚠⚠ A SECOND, FIXED PREDICATE — and for graduation it is load-bearing, not
+    # tidiness. `mjm3-8dw8` stacks six grains in one table, keyed on one column:
+    # a School row's "Geographic Subdivision" is a DBN (02M422), but so is a
+    # Transfer School row's. Measured 2026-09-21: of 497 School DBNs, **54 also
+    # appear under 'Transfer School'** — so filtering on the DBN alone returns
+    # both sets and double-counts 11% of high schools. (Charter School is also
+    # DBN-shaped, 85 of them, but overlaps School on 0.)
+    # Values are CONSTANTS declared here, never anything the caller supplies.
+    fixed_filters = {
+        'graduationoutcomes': ('Report Category', 'School'),
+    }
+
     if tbl not in col_map:
         raise HTTPException(status_code=404, detail="Table not found or not authorized")
-        
+
     col = col_map[tbl]
+    if tbl in fixed_filters:
+        fcol, fval = fixed_filters[tbl]
+        return await select(
+            f'SELECT * FROM {tbl} WHERE "{col}" = $1 AND "{fcol}" = $2', (id, fval))
     return await select(f'SELECT * FROM {tbl} WHERE "{col}" = $1', (id,))
 
 @app.get('/get/schools/schoolStats/{id}', tags=['Schools'])
 async def get_school_stats(id: str):
     # Get system_code for demographics
-    school = await select('SELECT "system_code" FROM schoollocations WHERE "location_code" = $1', (id,))
+    school = await select(f'SELECT "system_code" FROM {_SCHOOL_LOCATIONS} WHERE "location_code" = $1', (id,))
     if not school['rows']:
         return {'rows': []}
     system_code = school['rows'][0]['system_code']
@@ -2301,6 +2859,11 @@ async def get_budglines_by_prjtype(tslug: str):
     capitalbudget uses individual codes like 'HB'. We split the compound
     code and match any part.
     """
+    # ⚠ THE SAME ONE OWNER as the type endpoint below. All four type
+    # surfaces slugged with `REPLACE(' ', '-')` and would have kept the
+    # 18 unreachable pages EMPTY had only one been fixed.
+    _d = capitalslug.SLUG_SQL.format(col='s."Project Type Description"')
+    _t = capitalslug.SLUG_SQL.format(col='s."Project Type"')
     return await select("""
         SELECT
             b."Published Date"       AS pubdate,
@@ -2320,16 +2883,21 @@ async def get_budglines_by_prjtype(tslug: str):
                      ELSE s."Project Type Description" END,
                 ' and '))
             FROM capitalstrategy s
-            WHERE LOWER(REGEXP_REPLACE(REPLACE(s."Project Type Description", ' ', '-'), '-+', '-', 'g')) = $1
-               OR LOWER(REGEXP_REPLACE(REPLACE(s."Project Type", ' ', '-'), '-+', '-', 'g')) = $1
+            WHERE {d} = $1
+               OR {t} = $1
             GROUP BY s."Project Type", s."Project Type Description"
         )
         ORDER BY b."Published Date" DESC, b."Budget Line"
-    """, (tslug,))
+    """.format(d=_d, t=_t), (capitalslug.slug(tslug),))
 
 @app.get('/get/commitments_by_prjtype/{tslug}', tags=['Capital Projects'])
 async def get_commitments_by_prjtype(tslug: str):
     """Commitments for a project type, aliased for the commTable DataTable."""
+    # ⚠ THE SAME ONE OWNER as the type endpoint below. All four type
+    # surfaces slugged with `REPLACE(' ', '-')` and would have kept the
+    # 18 unreachable pages EMPTY had only one been fixed.
+    _d = capitalslug.SLUG_SQL.format(col='s."Project Type Description"')
+    _t = capitalslug.SLUG_SQL.format(col='s."Project Type"')
     return await select("""
         SELECT
             c."Published Date"       AS pubdate,
@@ -2354,12 +2922,61 @@ async def get_commitments_by_prjtype(tslug: str):
                      ELSE s."Project Type Description" END,
                 ' and '))
             FROM capitalstrategy s
-            WHERE LOWER(REGEXP_REPLACE(REPLACE(s."Project Type Description", ' ', '-'), '-+', '-', 'g')) = $1
-               OR LOWER(REGEXP_REPLACE(REPLACE(s."Project Type", ' ', '-'), '-+', '-', 'g')) = $1
+            WHERE {d} = $1
+               OR {t} = $1
             GROUP BY s."Project Type", s."Project Type Description"
         )
         ORDER BY c."Published Date" DESC, c."Budget Line"
-    """, (tslug,))
+    """.format(d=_d, t=_t), (capitalslug.slug(tslug),))
+
+def _unscopable(table, dimension, scope_id):
+    """The answer when a table cannot be counted for this dimension at all.
+
+    ⚠⚠ `res: None`, NEVER 0, AND THAT IS THE WHOLE POINT OF THIS SHAPE. The
+    shared provenance component treats three outcomes as three different
+    claims — a number, `0` ("this dataset holds nothing for this scope, a
+    FINDING"), and `—` ("we could not ask") — and the code this replaces
+    returned 0 for every table it had no rule for. A dataset that does not
+    carry a dimension has not told us it holds nothing; it has not been asked.
+    """
+    return {'rows': [{'res': None}], 'table': table, 'scope_type': dimension,
+            'scope_id': scope_id, 'via': None,
+            'retired': capitalsources.retired(table),
+            'note': ('This dataset carries no %s dimension and no key that '
+                     'resolves to a capital project, so it cannot be counted '
+                     'for one. That is not the same as holding no records for '
+                     'it.' % dimension.replace('_', ' '))}
+
+
+async def _scoped_source_count(table, dimension, scope_key):
+    """Records in one source table for one scope, via `modules/capitalsources`.
+
+    ⚠ ONE OWNER for both scoped-count endpoints, because they had two copies of
+    the same table→column map and five of the eleven entries between them named
+    a column that does not exist.
+
+    ⚠ `via` is SERVED. Two rows in one panel can be counted differently — a
+    table's own scope column where it has one, the project crosswalk where it
+    does not — and the gap is large (82 rows against 568 on one budget line).
+    Serving the method is what stops those being silently mixed.
+    """
+    sql, via = capitalsources.count_sql(table, dimension)
+    if not sql:
+        return _unscopable(table, dimension, scope_key)
+    result = await select(sql, (scope_key,))
+    rows = result.get('rows') or []
+    # ⚠ A query that returned nothing is not a zero either — `count(*)` always
+    # returns a row, so an empty result means the query itself failed to answer.
+    if not rows or rows[0].get('res') is None:
+        return _unscopable(table, dimension, scope_key)
+    return {'rows': [{'res': rows[0]['res']}], 'table': table.lower(),
+            'scope_type': dimension, 'scope_id': scope_key, 'via': via,
+            # ⚠ SERVED so the panel can label a 2023-series figure. Measured
+            # unlabelled on the category panel: the retired series' 2,671 sat
+            # beside four current sources with a BLANK "Last Updated" and
+            # nothing saying the series stops in October 2023.
+            'retired': capitalsources.retired(table)}
+
 
 @app.get('/get/pstats-records_no-by_prjtype/tblname/{tslug}', tags=['Capital Projects'])
 async def get_pstats_records_no_by_prjtype(tslug: str):
@@ -2387,21 +3004,88 @@ async def get_pstats_records_no_by_prjtype_real(tblname: str, tslug: str):
         query = f'SELECT COUNT(*) as res FROM {tblname} WHERE {col} ILIKE $1'
         result = await select(query, (f'%{tslug}%',))
     else:
-        query = f"SELECT COUNT(*) as res FROM {tblname} WHERE LOWER(REGEXP_REPLACE(REPLACE({col}, ' ', '-'), '-+', '-', 'g')) = $1"
-        result = await select(query, (tslug.lower(),))
+        # ⚠ THE ONE OWNER HERE TOO. This is the fourth of the four type
+        # surfaces: leaving it on `REPLACE(' ', '-')` would have made the
+        # provenance panel report 0 records for the 18 pages the other three
+        # fixes just made reachable — a confident wrong zero beside a table
+        # full of rows, which is the defect the scoped counts exist to avoid.
+        query = (f'SELECT COUNT(*) as res FROM {tblname} WHERE '
+                 + capitalslug.SLUG_SQL.format(col=col) + ' = $1')
+        result = await select(query, (capitalslug.slug(tslug),))
     if result.get('rows') and result['rows'][0].get('res', 0) > 0:
         return result
     return {'rows': [{'res': 0}]}
 
+# ⚠⚠ TWO OF THE EIGHT `capitalstrategy` VINTAGES ARE INGESTED WRONG, AND BOTH
+# PUBLISH A FUNDING TYPE WHERE A CATEGORY BELONGS. Measured 2026-09-08:
+#
+#   20250116  258 of 258 rows — `Ten-Year Plan Category` DUPLICATES
+#             `Funding Type`; everything else is aligned. The category is simply
+#             absent.
+#   20230112  275 of 275 rows — a LEFT SHIFT BY ONE: Funding Type landed in
+#             Category, First Fiscal Year in Funding Type, every amount moved one
+#             column left, and `Ten-Year Total` is NULL on all 275. So the money
+#             on those rows is attributed to the WRONG FISCAL YEARS.
+#
+# 533 of 2,255 rows, 23.6%. Live consequence before this: the project-type page
+# listed `City` and `Federal` as Ten-Year Plan Categories and linked them to
+# `/projects/categories/city`, a category that does not exist.
+#
+# ⚠ THE TEST IS ON THE DATA, NOT A HARDCODED DATE LIST — a date list goes stale
+# the moment a ninth vintage lands wrong, and this repo has paid for hardcoded
+# ranges before. Separation is exact: **0 of 1,722 rows on the six clean
+# vintages are flagged, and 533 of 533 on the two bad ones.**
+#
+# ⚠ EXCLUDED, NOT REPAIRED. Un-shifting 20230112 would mean asserting which
+# fiscal year each amount belongs to, which is a claim about NYC's publication
+# that this data cannot support. The fix belongs in the ingest; until then these
+# rows are withheld rather than published wrong.
+# ⚠⚠ TWO DEFECTS, TWO TREATMENTS — and treating them alike threw away 162 of
+# 236 project types. The first blanket exclusion dropped every row whose category
+# was a funding type, which is BOTH vintages; but only ONE of them has bad money.
+#
+#   `_STRATEGY_MONEY_OK`  drops the 275 LEFT-SHIFTED rows (20230112), whose
+#     amounts sit one fiscal year off. Tell: `Ten-Year Total` is NULL — exact,
+#     **275 of 275 on that vintage and 0 on the other seven**. The money is
+#     unusable, so the row goes. 228 of 236 types survive.
+#   `_STRATEGY_CATEGORY_OK`  keeps the 258 rows of 20250116 — their amounts are
+#     correctly aligned — and only withholds the CATEGORY, which duplicates the
+#     funding type. Exact the same way: **0 of 1,722 clean rows flagged, 533 of
+#     533 on the two bad vintages.**
+#
+# ⚠ BOTH TEST THE DATA, NOT A DATE LIST. A hardcoded list of bad vintages goes
+# stale the moment a ninth lands wrong, and this repo has paid for hardcoded
+# ranges before.
+# ⚠ NEITHER REPAIRS ANYTHING. Un-shifting 20230112 would mean asserting which
+# fiscal year each amount belongs to — a claim about NYC's publication this data
+# cannot support. The fix belongs in the ingest.
+_STRATEGY_MONEY_OK = "\"Ten-Year Total\" IS NOT NULL AND \"Ten-Year Total\" <> ''"
+_STRATEGY_CATEGORY_OK = (
+    "\"Ten-Year Plan Category\" NOT IN ('City', 'Federal', 'State', 'Private')")
+
+
 @app.get('/get/capitalprojects/stratcategory/{cslug}', tags=['Capital Projects'])
 async def get_capital_projects_stratcategory(cslug: str):
     """Get capital strategy data filtered by category slug."""
-    cslug_clean = cslug.replace('-', ' ')
+    # ⚠⚠ SLUG BOTH SIDES THE SAME WAY. This matched on
+    # `REPLACE(category, ' ', '-')`, which is NOT how Laravel builds the slug in
+    # the URL: **12 of 138 categories carry a comma**, so
+    # `large, major and regional park reconstruction` produced
+    # `large,-major-and-...` here against `large-major-and-...` in the link, and
+    # the page 404'd on its own URL.
+    # ⚠ The `ILIKE '%…%'` fallback that used to rescue some of them is GONE, and
+    # deliberately: it also matched `sewers` inside `COMBINED SEWERS AND WATER
+    # MAINS`, so a category page could list another category's plan. An exact
+    # slug comparison is either right or empty; a loose one is quietly wrong.
     return await select(
         'SELECT * FROM capitalstrategy '
-        'WHERE LOWER(REPLACE("Ten-Year Plan Category", \' \', \'-\')) = $1 '
-        'OR LOWER("Ten-Year Plan Category") ILIKE $2',
-        (cslug, f'%{cslug_clean}%')
+        "WHERE trim(both '-' from regexp_replace(lower(\"Ten-Year Plan Category\"), "
+        "'[^a-z0-9]+', '-', 'g')) = $1 "
+        # ⚠ BOTH guards here: a category page needs a real category (or
+        # `/projects/categories/city` becomes a page built from a funding type)
+        # AND real money (or its plan chart is a fiscal year out).
+        "  AND " + _STRATEGY_CATEGORY_OK + " AND " + _STRATEGY_MONEY_OK,
+        (cslug.lower(),)
     )
 
 @app.get('/get/capitalprojects/by_category/{cslug}', tags=['Capital Projects'])
@@ -2419,53 +3103,34 @@ async def get_capital_projects_by_category(cslug: str):
 
 @app.get('/get/pstats-records_no-by_category/tblname/{cslug}', tags=['Capital Projects'])
 async def get_pstats_records_no_by_category(cslug: str):
-    return {'rows': [{'res': 0}]}
+    """The un-substituted template route. ⚠ `res: None`, not 0 — see below."""
+    return _unscopable('(no table)', 'ten_year_category', cslug)
+
 
 @app.get('/get/pstats-records_no-by_category/{tblname}/{cslug}', tags=['Capital Projects'])
 async def get_pstats_records_no_by_category_real(tblname: str, cslug: str):
-    """Count records for a category in a specific capital projects table.
+    """Records in one source table for one Ten-Year category.
 
-    Why: Each table uses a different column for category. Category names
-    are slugified, so we match by slugifying column values.
+    ⚠⚠ THE COLUMN MAP THIS REPLACES RETURNED **0** FOR EVERY TABLE IT HAD NO
+    RULE FOR, and the shared provenance component reads 0 as "this dataset holds
+    nothing for this scope — a finding". So widening this panel to the spine's
+    three current sources published a confident, plausible, wrong zero about
+    datasets the page's own table draws hundreds of projects from. That is why
+    the panel was left narrow, and it is what `modules/capitalsources` ends.
+
+    ⚠⚠ AND ITS `capitalbudget` ENTRY NAMED `"Ten-Year Plan Category"`, A COLUMN
+    THAT TABLE DOES NOT HAVE — a live 500 (measured 2026-09-10), one of five
+    such entries across the two scoped-count endpoints. `capitalbudget` carries
+    no category dimension at all, so the honest answer is "cannot be scoped",
+    which is `None` and renders `—`.
+
+    ⚠ Slugged on BOTH sides through `modules/capitalslug`. Comparing resolved
+    NAMES was tried and is wrong: `capitalstrategy` spells only 5 of the spine's
+    138 category names identically and 124 match only after case-folding, so a
+    name comparison read 0 on that source for 124 of 138 pages.
     """
-    col_map = {
-        'capitalbudget': ('"Ten-Year Plan Category"', 'slug'),
-        'capitalcommitmentplan': None,
-        'capitalprojectscommitments': None,
-        'capitalprojectsdollarscomp': ('"wegov-project-category-slug"', 'exact'),
-        'capitalstrategy': ('"Ten-Year Plan Category"', 'slug'),
-    }
-    entry = col_map.get(tblname.lower())
-    if not entry:
-        return {'rows': [{'res': 0}]}
-    col, match_type = entry
-    if match_type == 'exact':
-        query = f'SELECT COUNT(*) as res FROM {tblname} WHERE {col} = $1'
-        result = await select(query, (cslug,))
-    else:
-        query = f"SELECT COUNT(*) as res FROM {tblname} WHERE LOWER(REGEXP_REPLACE(REPLACE({col}, ' ', '-'), '-+', '-', 'g')) = $1"
-        result = await select(query, (cslug.lower(),))
-    if result.get('rows') and result['rows'][0].get('res', 0) > 0:
-        return result
-    return {'rows': [{'res': 0}]}
-
-@app.get('/get/capitalprojects/by_budgetline/{blcode}', tags=['Capital Projects'])
-async def get_capital_projects_by_budgetline(blcode: str):
-    """Get projects for a budget line from capitalprojectsdollarscomp.
-
-    Why: capitalbudget uses spaces (AG 0001), capitalprojectsdollarscomp uses
-    dashes (AG-0001). We try all format variants to ensure a match.
-    """
-    import re
-    query = 'SELECT * FROM capitalprojectsdollarscomp WHERE "BUDGET_LINE" = $1'
-    stripped = blcode.replace(' ', '').replace('-', '')
-    spaced = re.sub(r'^([A-Za-z]+)(\w)', r'\1 \2', stripped)
-    dashed = re.sub(r'^([A-Za-z]+)(\w)', r'\1-\2', stripped)
-    for v in dict.fromkeys([blcode, stripped, spaced, dashed]):
-        result = await select(query, (v,))
-        if result.get('rows'):
-            return result
-    return {"rows": []}
+    return await _scoped_source_count(tblname, 'ten_year_category',
+                                      capitalslug.slug(cslug))
 
 @app.get('/get/capitalcommitments/stats_by_budgetline/{blcode}', tags=['Capital Projects'])
 async def get_capital_commitments_stats_by_budgetline(blcode: str):
@@ -2475,7 +3140,34 @@ async def get_capital_commitments_stats_by_budgetline(blcode: str):
     yr1amount-yr5amount (sums). Budget line formats vary across tables (spaces, dashes,
     none), so we try all variants.
     """
-    import re
+    # ⚠⚠ ONE NORMALISED QUERY, NOT A LIST OF GUESSED SPELLINGS — and the loop this
+    # replaces returned a PARTIAL answer for most budget lines. It tried
+    # `blcode`, a stripped form, and forms with a space or a hyphen inserted
+    # after the leading alpha run, and RETURNED THE FIRST that yielded any rows.
+    # `capitalcommitmentplan` genuinely spells one line several ways across
+    # vintages, so "the first spelling with rows" silently drops the others.
+    #
+    # Measured 2026-09-10 over every row of that table:
+    #
+    #   1,817 of 2,724 distinct budget lines carry MORE THAN ONE spelling,
+    #   covering 51,623 of 59,076 rows (87%), and each of those 1,817 lines
+    #   loses exactly ONE publication vintage — 1,817 vintages absent from the
+    #   chart's own date dropdown.
+    #
+    # `C 0075` holds 30 vintages (2016-04-26 → 2026-05-12) and `C -0075` holds
+    # one (2018-10-10); the loop served whichever it reached first and the other
+    # vintage did not exist as far as the page was concerned.
+    #
+    # ⚠ THE UNION IS PURELY ADDITIVE, MEASURED RATHER THAN ASSUMED: **0** group
+    # keys `(normalised line, Published Date, Funding Type)` span two spellings,
+    # so no group can merge and no figure can double-count. That check is what
+    # makes this safe to change on a published chart.
+    #
+    # ⚠ `modules/budgetline` is the ONE owner of this rule, in both languages.
+    # The hand-rolled variants here were a second spelling of it and could not
+    # generate the padded single-letter form the sources use (`P -I001`,
+    # `C -0075`) at all.
+    norm = budgetline.norm(blcode)
     query = """
         SELECT "Published Date", "Funding Type",
                COUNT(*) as comm_no,
@@ -2486,17 +3178,13 @@ async def get_capital_commitments_stats_by_budgetline(blcode: str):
                SUM(CAST(COALESCE(NULLIF("Fiscal Year 4 Amount", ''), '0') AS NUMERIC)) as yr4amount,
                SUM(CAST(COALESCE(NULLIF("Fiscal Year 5 Amount", ''), '0') AS NUMERIC)) as yr5amount
         FROM capitalcommitmentplan
-        WHERE "Budget Line" = $1
+        WHERE """ + budgetline.sql_norm('"Budget Line"') + """ = $1
         GROUP BY "Published Date", "Funding Type"
         ORDER BY "Published Date" DESC, "Funding Type"
     """
-    stripped = blcode.replace(' ', '').replace('-', '')
-    spaced = re.sub(r'^([A-Za-z]+)(\w)', r'\1 \2', stripped)
-    dashed = re.sub(r'^([A-Za-z]+)(\w)', r'\1-\2', stripped)
-    for v in dict.fromkeys([blcode, stripped, spaced, dashed]):
-        result = await select(query, (v,))
-        if result.get('rows'):
-            return result
+    result = await select(query, (norm,))
+    if result.get('rows'):
+        return result
     return {"rows": []}
 
 @app.get('/get/commitments/by_budgetline/{blcode}', tags=['Capital Projects'])
@@ -2518,45 +3206,54 @@ async def get_commitments_by_budgetline(blcode: str):
     for v in dict.fromkeys([blcode, stripped, spaced, dashed]):
         result = await select(query, (v,))
         if result.get('rows'):
+            # ⚠ ONE DATE FORMAT, AND IT BELONGS AT THE ENDPOINT. `plancommdate`
+            # is already in `_DATE_COLUMNS`, but that labelling runs in
+            # `routers/capital.py` and this endpoint never called it — so the
+            # budget-line page rendered 10 raw `06/01/2026` cells beside a
+            # sources table and a profile that both say `1 Jun 2026`. Served
+            # BESIDE the raw value, never instead of it: `MM/DD/YYYY` is what
+            # the City published and what a consumer joins on.
+            for r in result['rows']:
+                if 'plancommdate' in r:
+                    r['plancommdate_label'] = _capital_mdy_label(r['plancommdate'])
             return result
     return {"rows": []}
 
 @app.get('/get/pstats-records_no-by_budgetline/tblname/{blcode}', tags=['Capital Projects'])
 async def get_pstats_records_no_by_budgetline(blcode: str):
-    return [{'res': 0}]
+    """The un-substituted template route. ⚠ `res: None`, not 0 — see below."""
+    return _unscopable('(no table)', 'budget_line', blcode)
+
 
 @app.get('/get/pstats-records_no-by_budgetline/{tblname}/{blcode}', tags=['Capital Projects'])
 async def get_pstats_records_no_by_budgetline_real(tblname: str, blcode: str):
-    """Count records for a budget line in a specific capital projects table.
+    """Records in one source table for one budget line.
 
-    Why: Each table uses a different column name for budget line and a different
-    format (spaces, dashes, no separator). We map table→column and try all variants.
+    ⚠⚠ FOUR OF THIS ENDPOINT'S EIGHT COLUMN MAPPINGS NAMED A COLUMN THAT DOES
+    NOT EXIST — every one a live 500, measured 2026-09-10 against
+    `information_schema`:
+
+        capprojectsbudgetsandschedule  "BUDGET_LINE"  -> it is "Budget Line"
+        capprojectsbudgetandspend      "BUDGET_LINE"  -> no such column
+        capprojectsbudgetspendhistory  "BUDGET_LINE"  -> no such column
+        capprojectsschedulehistory     "BUDGET_LINE"  -> no such column
+
+    The last three carry no budget-line dimension at all, so they now answer
+    "cannot be scoped" (`None`, rendered `—`) rather than 500ing — and the first
+    answers with real rows.
+
+    ⚠⚠ AND THE TRY-EACH-SPELLING LOOP IS GONE. It returned the FIRST spelling
+    with any rows, which on `capitalcommitmentplan` silently dropped a
+    publication vintage for 1,817 of 2,724 budget lines — the same defect fixed
+    in `/get/capitalcommitments/stats_by_budgetline` this session.
+    `modules/budgetline` normalises both sides once.
+
+    ⚠ An unmapped table returned **0**, which the provenance component reads as
+    "this dataset holds nothing for this budget line — a finding". `None` is the
+    honest answer and is a different claim.
     """
-    import re
-    # Map table name to its budget line column
-    col_map = {
-        'capitalbudget': '"Budget Line"',
-        'capitalcommitmentplan': '"Budget Line"',
-        'capitalprojectscommitments': 'budgetline',
-        'capitalprojectsdollarscomp': '"BUDGET_LINE"',
-        'capprojectsbudgetsandschedule': '"BUDGET_LINE"',
-        'capprojectsbudgetandspend': '"BUDGET_LINE"',
-        'capprojectsbudgetspendhistory': '"BUDGET_LINE"',
-        'capprojectsschedulehistory': '"BUDGET_LINE"',
-    }
-    col = col_map.get(tblname.lower())
-    if not col:
-        return {'rows': [{'res': 0}]}
-
-    stripped = blcode.replace(' ', '').replace('-', '')
-    spaced = re.sub(r'^([A-Za-z]+)(\w)', r'\1 \2', stripped)
-    dashed = re.sub(r'^([A-Za-z]+)(\w)', r'\1-\2', stripped)
-    for v in dict.fromkeys([blcode, stripped, spaced, dashed]):
-        query = f'SELECT COUNT(*) as res FROM {tblname} WHERE {col} = $1'
-        result = await select(query, (v,))
-        if result.get('rows') and result['rows'][0].get('res', 0) > 0:
-            return result
-    return {'rows': [{'res': 0}]}
+    return await _scoped_source_count(tblname, 'budget_line',
+                                      budgetline.norm(blcode))
 
 @app.get('/get/capitalcommitmentplan/all', tags=['Capital Projects'])
 async def get_capital_commitment_plan_all():
@@ -2662,15 +3359,105 @@ async def get_capital_projects_taxonomy_all():
 async def get_capital_projects_taxonomy(date: str):
     return await select('SELECT DISTINCT "Project Type" as type, count(*) as count FROM capitalprojectsdollarscomp WHERE "PUB_DATE" = $1 GROUP BY "Project Type" ORDER BY "Project Type"', (date,))
 
+@app.get('/get/capitalprojects/type-slugs', tags=['Capital Projects'])
+async def get_capital_project_type_slugs():
+    """The set of project-type slugs that HAVE a page, so a caller can gate a link.
+
+    ⚠⚠ THE TYPES INDEX LINKED EVERY ROW, AND 8 OF THEM CANNOT RESOLVE. Measured
+    2026-09-10 by sweeping all 202 published names: 194 resolve and **8 return
+    404** — `Day Care Facilities`, `Energy Conservation Projects`, `Ferry
+    Maintenance Facility Construction`, `Low to Moderate Income Public Housing
+    Construction`, `Miscellaneous Transit Improvement Projects`, `Rehabilitation
+    of Court Buildings`, `Replacement of Electrical Distribution Systems`,
+    `Vehicle Purchase or Retrofit`. None carries punctuation, so none is a slug
+    casualty: their only rows live in the two defective `capitalstrategy`
+    vintages, which the money guard drops. That is CORRECT behaviour — and a
+    link to it is not. This section's standing rule is that a link landing on a
+    404 is worse than text, and this is the fifth instance.
+
+    ⭐ THE PREDICATE IS THE PAGE'S OWN. `/get/pstats-categories_by_type/{tslug}`
+    returns rows exactly when `"Ten-Year Total"` is present, and the controller
+    404s on an empty result — so resolvability is that condition and nothing
+    else. Re-deriving it here with a second rule is the suffix-list defect: a
+    gate that measures a different system than the thing it gates.
+
+    ⚠ And the slug comes from `modules/capitalslug`, the one owner, so the
+    caller never re-derives it — which is exactly how `/projects/types/{slug}`
+    came to be unable to match its own URLs.
+    """
+    d = capitalslug.SLUG_SQL.format(col='s."Project Type Description"')
+    t = capitalslug.SLUG_SQL.format(col='s."Project Type"')
+    res = await select("""
+        SELECT DISTINCT {d} AS d_slug, {t} AS t_slug
+        FROM capitalstrategy s
+        WHERE s."Ten-Year Total" IS NOT NULL AND s."Ten-Year Total" <> ''
+    """.format(d=d, t=t))
+    slugs = set()
+    for r in res.get('rows', []):
+        for key in ('d_slug', 't_slug'):
+            v = (r.get(key) or '').strip()
+            if v:
+                slugs.add(v)
+    return {"slugs": sorted(slugs), "count": len(slugs)}
+
+
 @app.get('/get/pstats-categories_by_type/{tslug}', tags=['Capital Projects'])
 async def get_pstats_categories_by_type(tslug: str):
-    """Aggregate categories by project type for prjType_a view.
+    """The Ten-Year Capital Strategy's amounts for one project type.
 
-    Why: prjTypeA.blade.php expects pubdate, prjtype, prjtypename, category,
-    fundingsource, year1amount, year10total, prjnum, plannedcost, currcost.
-    We compute these from capitalstrategy LEFT JOINed to capitalprojectsdollarscomp,
-    filtered by project type slug.
+    ⚠⚠ THIS WAS A MIXED PAGE AND NOTHING SAID SO. It LEFT JOINed
+    `capitalprojectsdollarscomp` — the series NYC retired 2023-10-26 — for
+    `prjnum`, `plannedcost` and `currcost`, and served them beside LIVE strategy
+    amounts (`capitalstrategy`'s latest publication is 2025-05-01). Measured over
+    25 sampled types / 362 rows: the join contributed a figure on **127 rows and
+    zeros on the other 235**, so two thirds of the table read "0 projects,
+    $0 planned" for real programmes. Those three columns are gone.
+
+    ⚠⚠ AND THEY CANNOT BE REPLACED WITH SPINE FIGURES, WHICH IS THE WHOLE POINT.
+    `capitalstrategy` has **no project key** — its columns are (Published Date,
+    Project Type, Project Type Description, Ten-Year Plan Category, Funding Type,
+    Fiscal Year 1-10 Amount, Ten-Year Total), 267 rows for a whole city. The join
+    it used was on (publication date, CATEGORY), so it attributed a whole
+    category's projects to one type; a category spans many types, and doing the
+    same thing against the spine would be the identical error with fresher
+    numbers. **A project count belongs on the category page, which has one.**
+
+    ⚠ The category cell links there, which is the honest connection: same
+    vocabulary, and that page now lists the spine's projects.
+
+    ⚠⚠ AND ITS SLUG WAS A THIRD SPELLING, WHICH MADE 18 REAL TYPE PAGES
+    UNREACHABLE — measured 2026-09-10, and it is the category endpoints' own
+    defect surviving in the one place that was never migrated. The WHERE
+    compared `LOWER(REGEXP_REPLACE(REPLACE(name, ' ', '-'), '-+', '-', 'g'))`,
+    which replaces SPACES only: an apostrophe, an ampersand, a comma or a slash
+    survives into a slug no URL can ever carry.
+
+        Department of Parks & Recreation        -> department-of-parks-&-recreation
+        Children's Services                     -> children's-services
+        DEP - Water Mains, Sources and Treatment -> …water-mains,-sources-and-treatment
+
+    Of 236 distinct type descriptions, **18 slug differently from
+    `modules/capitalslug`, every one of them carries usable rows, and 212 usable
+    rows were stranded** behind a URL that could not be typed. `Department of
+    Parks & Recreation` alone holds 76.
+
+    ⭐ IT RECONCILES, which is why the diagnosis is trustworthy: a sweep of the
+    rendered index found **26** published type names returning 404, and
+    18 slug-defect + 8 genuinely-empty = 26 — the 8 matching the "228 types
+    survive, 8 correctly 404" figure measured independently on 2026-09-08.
+
+    ⚠ I first attributed all of these to the two defective `capitalstrategy`
+    vintages and recorded that in a handoff. **That was wrong**, and the tell was
+    that `Department of Parks & Recreation` is not a marginal programme. Checking
+    the row counts rather than reasoning from a known nearby defect is what
+    separated the 18 from the 8.
     """
+    # ⚠ BUILT FROM THE ONE OWNER, never re-typed here. `SLUG_SQL` is a format
+    # string taking `{col}`, so the two comparisons cannot drift from each other
+    # or from `capitalslug.slug()` — which is the property a guard asserts by
+    # parsing the character class back out of the emitted SQL.
+    _d = capitalslug.SLUG_SQL.format(col='s."Project Type Description"')
+    _t = capitalslug.SLUG_SQL.format(col='s."Project Type"')
     return await select("""
         SELECT
             CASE WHEN LENGTH(s."Project Type") <= 10 THEN s."Project Type"
@@ -2681,32 +3468,23 @@ async def get_pstats_categories_by_type(tslug: str):
             s."Ten-Year Plan Category"                  AS category,
             s."Funding Type"                            AS fundingsource,
             SUM(NULLIF(s."Fiscal Year 1 Amount", '')::BIGINT) AS year1amount,
-            SUM(NULLIF(s."Ten-Year Total", '')::BIGINT)       AS year10total,
-            COALESCE(p.prjnum, 0)                       AS prjnum,
-            COALESCE(p.plannedcost, 0)                  AS plannedcost,
-            COALESCE(p.currcost, 0)                     AS currcost
+            SUM(NULLIF(s."Ten-Year Total", '')::BIGINT)       AS year10total
         FROM capitalstrategy s
-        LEFT JOIN (
-            SELECT
-                "STRATEGY_PUB_DATE"                     AS pub_date,
-                UPPER("wegov-project-category")         AS cat_upper,
-                COUNT(DISTINCT "PROJECT_ID")             AS prjnum,
-                SUM("BUDG_ORIG"::BIGINT)                 AS plannedcost,
-                SUM(TRIM(REPLACE(NULLIF("BUDG_CURR", ''), ',', '.'))::NUMERIC::BIGINT) AS currcost
-            FROM capitalprojectsdollarscomp
-            GROUP BY "STRATEGY_PUB_DATE", UPPER("wegov-project-category")
-        ) p ON p.pub_date = s."Published Date"
-            AND p.cat_upper = UPPER(s."Ten-Year Plan Category")
-        WHERE LOWER(REGEXP_REPLACE(REPLACE(s."Project Type Description", ' ', '-'), '-+', '-', 'g')) = $1
-           OR LOWER(REGEXP_REPLACE(REPLACE(s."Project Type", ' ', '-'), '-+', '-', 'g')) = $1
+        WHERE ({d} = $1
+            OR {t} = $1)
+          -- ⚠ MONEY GUARD ONLY. Excluding the funding-type-as-category rows too
+          -- emptied **162 of 236 type pages**, because most types appear only in
+          -- the two defective vintages. Their AMOUNTS are fine on 20250116; it is
+          -- the category label that is missing, and the view says so per row
+          -- rather than the endpoint discarding the money.
+          AND s."Ten-Year Total" IS NOT NULL AND s."Ten-Year Total" <> ''
         GROUP BY s."Project Type",
                  s."Project Type Description",
                  s."Published Date",
                  s."Ten-Year Plan Category",
-                 s."Funding Type",
-                 p.prjnum, p.plannedcost, p.currcost
+                 s."Funding Type"
         ORDER BY s."Published Date" DESC, s."Ten-Year Plan Category"
-    """, (tslug,))
+    """.format(d=_d, t=_t), (capitalslug.slug(tslug),))
 
 
 @app.get('/delete/{tbl}', tags=['Datasets'], summary="Delete dataset", 

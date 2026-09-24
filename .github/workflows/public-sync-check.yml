@@ -67,7 +67,7 @@ jobs:
             const body = [
               failed
                 ? '⚠️ The dry run **failed its secret scan**. Nothing was pushed. Resolve the findings below before syncing — a new secret may have been committed, or `scripts/sync-public.sh` may need a new redaction rule.'
-                : 'The public snapshot (`wegovnyc/databook`) has drifted from `main`. Review the diff below, then publish:',
+                : 'The public snapshot (`sarapis/databook`) has drifted from `main`. Review the diff below, then publish:',
               '',
               '```',
               'bash scripts/sync-public.sh          # dry run, read the scan + diff',

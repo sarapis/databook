@@ -115,6 +115,24 @@ services:
       - shared_data:/app/shared
       - ./api/env.yaml:/app/env.yaml
       - ./titles_analysis.csv:/app/titles_analysis.csv
+      # ⚠⚠ CURATED SEEDS ARE READ FROM THE CHECKOUT, NOT FROM THE IMAGE.
+      # They were baked in, so the container's copy went stale the moment new
+      # rows were committed and stayed stale until the next api rebuild. That
+      # is a data-loss bug, not an inconvenience: export_review_decisions.py
+      # --emit reads this directory and rewrites the seed, so an export run
+      # after a commit but before a redeploy would drop the committed rows —
+      # and its "the emit must be longer than the file it replaces" guard
+      # compares against the same stale copy, so it could not catch it.
+      #
+      # CLAUDE.md's rule is that curated seeds live in api/seed/ IN GIT. This
+      # makes the running system read that, rather than a snapshot of it.
+      #
+      # ⚠ Read-WRITE deliberately: build_license_procurement.py writes
+      # seed/govoss_catalog_snapshot.json and eval_contract_classifier.py
+      # writes seed/eval_contract_sample.csv. A :ro mount would break both,
+      # and the snapshot currently vanishes on every rebuild, which is the
+      # documented reason `--offline` stops working.
+      - ./api/seed:/app/seed
       # Local data lake (spending/budget/revenue Parquet). Empty by default; on
       # prod DATA_LAKE_PATH points at the populated host dir. Only read when
       # SPENDING_DATA_BASE/BUDGET_REVENUE_BASE point at /data.

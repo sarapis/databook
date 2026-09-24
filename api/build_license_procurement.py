@@ -22,9 +22,19 @@ the seed, where it is a diff. This is the #146 lesson made structural: an
 unreviewed candidate must not be able to reach a public page by accident.
 
 ⚠ AN EMPTY MATCH MEANS "NOT MAPPED", NOT "NO ALTERNATIVE EXISTS". The
-catalogue's `replaces` index covers 95 proprietary products out of 1,995
-entries. The only absences safe to report as real gaps are the four the
-catalogue itself asserts in /meta.json -> known_gaps.
+catalogue's `replaces` index maps only a small minority of its entries, so most
+empty matches are unmapped keys rather than absent alternatives. The only
+absences safe to report as real gaps are the ones the catalogue itself asserts
+in /meta.json -> known_gaps.
+⚠ Do NOT quote a coverage figure from this docstring -- read it from the live
+`license_catalogue_meta` row, which the run below writes. A figure typed here
+is a SNAPSHOT and this one had already rotted once: it read "95 of 1,995
+entries" and measured 290 of 3,249 on 2026-09-01, i.e. the index had roughly
+tripled while the docstring still argued for more caution than the data did.
+⚠ And a product absent from the `replaces` index may still BE in the catalogue
+as an entry -- measured 2026-09-01, Keycloak, Matomo, Plausible and Limesurvey
+are all present as entries while the proprietary products they answer (Gigya,
+Webtrends) map to nothing. Probe `entry_names` before calling something a gap.
 
     docker compose exec -T api python build_license_procurement.py
     docker compose exec -T api python build_license_procurement.py --offline
@@ -90,6 +100,31 @@ CREATE TABLE IF NOT EXISTS license_product_class (
     why          text NOT NULL DEFAULT '',
     tier         text NOT NULL DEFAULT 'curated',
     built_at     timestamptz NOT NULL DEFAULT now()
+);
+-- ⚠⚠ WHO MAKES IT. Entirely curated -- there is no `tier` column because there
+-- is no automatic tier and must not be one. Every other claim on a family page
+-- is about a CONTRACT. This one names a COMPANY, where being wrong is a
+-- different kind of wrong. An absent row renders "Maker not yet identified",
+-- which is the correct state for the 794 families nobody has researched.
+-- ⚠ `maker_vendor_id` is a PASSPort supplier id looked up against `vendors`,
+-- never derived from the name: `%HEXAGON%` matches an electrical contractor and
+-- `%BROADCOM%` matches WCA Technologies. Blank is meaningful -- it says the
+-- maker is not a registered City vendor, so every dollar reaches it through a
+-- reseller.
+CREATE TABLE IF NOT EXISTS license_family_maker (
+    family           text PRIMARY KEY,
+    maker            text NOT NULL,
+    maker_kind       text NOT NULL DEFAULT 'company',
+    maker_vendor_id  text NOT NULL DEFAULT '',
+    parent           text NOT NULL DEFAULT '',
+    formerly         text NOT NULL DEFAULT '',
+    hq               text NOT NULL DEFAULT '',
+    ticker           text NOT NULL DEFAULT '',
+    website          text NOT NULL DEFAULT '',
+    source_url       text NOT NULL DEFAULT '',
+    as_of            text NOT NULL DEFAULT '',
+    why              text NOT NULL DEFAULT '',
+    built_at         timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS license_replacement_candidate (
     family         text NOT NULL,
@@ -214,7 +249,17 @@ async def main():
     conn = await asyncpg.connect(**dbcreds.settings(Config.db))
     try:
         for stmt in DDL.strip().split(";"):
-            if stmt.strip():
+            # ⚠⚠ SKIP A COMMENT-ONLY CHUNK, and the reason is a trap worth
+            # knowing: this splits on ";" without parsing, so a SEMICOLON INSIDE
+            # A `--` COMMENT cuts a statement in half and leaves a fragment that
+            # is nothing but comment text. Postgres returns no command tag for
+            # it, and asyncpg then dies on `'NoneType' object has no attribute
+            # 'decode'` -- an error naming nothing, from a line that looks
+            # correct. Cost an hour on 2026-09-18 when a new table's comment
+            # read "...is about a CONTRACT; this one names a COMPANY".
+            body = "\n".join(l for l in stmt.splitlines()
+                             if not l.strip().startswith("--")).strip()
+            if body:
                 await conn.execute(stmt)
 
         # --- our families -------------------------------------------------
@@ -268,6 +313,32 @@ async def main():
         print(f"purchase classes: {len(cls_rows)} loaded"
               + (f"  ⚠ {len(unknown_cls)} name no live family: {unknown_cls[:5]}"
                  if unknown_cls else ""))
+
+        # --- 1a-bis. WHO MAKES IT -----------------------------------------
+        # ⚠ A straight replace is safe here and nowhere else in this file: every
+        # row is curated, so there is no AI-written value to preserve. The other
+        # loaders must not TRUNCATE precisely because they share their table with
+        # an automatic pass.
+        mk_rows = read_seed("license_family_maker.csv")
+        async with conn.transaction():
+            await conn.execute("DELETE FROM license_family_maker")
+            for r in mk_rows:
+                await conn.execute(
+                    """INSERT INTO license_family_maker
+                           (family, maker, maker_kind, maker_vendor_id, parent,
+                            formerly, hq, ticker, website, source_url, as_of, why)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+                    r["family"].strip(), r["maker"].strip(),
+                    (r.get("maker_kind") or "company").strip(),
+                    (r.get("maker_vendor_id") or "").strip(),
+                    (r.get("parent") or "").strip(), (r.get("formerly") or "").strip(),
+                    (r.get("hq") or "").strip(), (r.get("ticker") or "").strip(),
+                    (r.get("website") or "").strip(), (r.get("source_url") or "").strip(),
+                    (r.get("as_of") or "").strip(), (r.get("why") or "").strip())
+        unknown_mk = [r["family"] for r in mk_rows if r["family"].strip() not in fam_value]
+        print(f"makers: {len(mk_rows)} loaded"
+              + (f"  ⚠ {len(unknown_mk)} name no live family: {unknown_mk[:5]}"
+                 if unknown_mk else ""))
 
         # --- 1b. PRODUCT-grain class overrides ----------------------------
         # ⚠ Why a second table rather than more rows in the one above: the family

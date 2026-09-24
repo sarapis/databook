@@ -109,6 +109,46 @@ def test_the_sql_rule_and_the_python_rule_agree():
     )
 
 
+def test_the_sql_rule_is_null_safe_and_matches_python_on_every_id_shape():
+    """⚠⚠ THE DEFECT THIS EXISTS FOR, and the guard above could not see it.
+
+    Checking the SQL's SHAPE says nothing about its VALUE. For an all-numeric
+    contract id `substring(id from '^[A-Za-z]+')` is NULL, and `NULL IN
+    ('MA','MMA')` is NULL — so the SQL returned NULL where `is_master` returns
+    False. In a three-way FILTER split that loses the row from EVERY branch,
+    because `NOT (NULL)` and `NULL` are both non-true: measured on prod, 2 tech
+    contracts carrying $2,500,000 disappeared from the Overview's by-year value
+    series while its CONTRACT COUNT closed exactly, which is what hid it.
+
+    So this simulates SQL's three-valued logic in Python and demands a real
+    boolean for every id shape the vocabulary contains — including the ones with
+    no leading alpha run, which is the case the shape check cannot reach.
+    """
+    sql = ck.sql_is_master("c.contract_id")
+    assert "coalesce(" in sql.lower(), (
+        "the SQL master test is not NULL-safe: an id with no leading alpha run "
+        "yields NULL, and a NULL predicate drops the row from BOTH sides of a "
+        "committed/ceiling split while COUNT(*) still counts it"
+    )
+
+    def sql_eval(cid):
+        """SQL semantics of the emitted predicate, NULL included."""
+        m = re.match(r'[A-Za-z]+', cid or '')
+        run = m.group(0) if m else None          # substring(...) -> NULL
+        inner = None if run is None else (run in ck.MASTER_KINDS)  # NULL IN (..) -> NULL
+        return False if inner is None else inner  # coalesce(inner, false)
+
+    # ⚠ The vocabulary must include the shapes that produce NULL, or this test is
+    # the old one again with extra steps.
+    for cid in ('MA1-858-20268803269', 'MMA1-858-20268803269', 'CT1-002-20228801501',
+                'CTA1-002-2022', 'RCT1-002-2022', 'CTR1-002-2022',
+                '20226000061', '20226000060', '', '123', '-', '1-2-3'):
+        assert sql_eval(cid) == ck.is_master(cid), (
+            f"the SQL and Python rules disagree for {cid!r}: "
+            f"sql={sql_eval(cid)} python={ck.is_master(cid)}"
+        )
+
+
 def test_master_kinds_has_not_silently_grown_or_shrunk():
     """Pins the set itself. Adding a kind here reclassifies published dollar
     figures on three surfaces, so it should be a deliberate diff."""

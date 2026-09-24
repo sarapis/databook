@@ -29,9 +29,34 @@ and the live sampler at `app/public/themes/theme-preview.html`
 | `--db-navy-900 … --db-navy-050`, `--db-primary` | the primary/brand ramp (header, section heads, bands, tints) |
 | `--db-link`, `--db-link-hover`, `--db-link-visited` | link colors |
 | `--db-accent`, `--db-accent-soft` | functional accent (active underline, focus ring) |
-| `--db-brand`, `--db-brand-hover`, `--db-brand-bg`, `--db-brand-wash` | wordmark + editorial "Analysis" surface |
+| `--db-brand`, `--db-brand-hover`, `--db-brand-bg`, `--db-brand-wash`, **`--db-brand-fg`** | wordmark + editorial "Analysis" surface |
 | `--db-on-dark-accent`, `--db-navy-gradient`, `--db-deadline-on-dark` | brand-derived tints used on dark surfaces |
 | `--bs-primary*`, `--bs-link-color*` | Bootstrap bridge — repoint at the new primary/link |
+
+> ⚠⚠ **A BRAND MUST SUPPLY A `-fg` THAT CLEARS 4.5:1 ON ITS OWN `-bg` AND
+> `-wash`.** This is a hard requirement of the override list, not advice, and it
+> is here because overriding only the fills reproduces a real bug.
+>
+> Databook's Analysis surface shipped `--db-brand`, `-hover`, `-bg` and `-wash`
+> and **no `-fg`**, while every other semantic family (`success`, `danger`,
+> `warning`, `info`) shipped a foreground beside its background. So an author
+> wanting "brand text on the brand fill" had one token to reach for — the
+> saturated identity colour, meant for borders, fills and text on navy. Five
+> rules independently made that choice and every one failed WCAG AA: **2.02:1**
+> on `-bg` and **2.10:1** on `-wash`, against the 4.5:1 that 13px bold needs.
+>
+> ⭐ **It propagated through this contract.** `themes/wegov-theme.css` overrode
+> exactly the four brand slots as documented and inherited the bug for free —
+> **2.91:1** and **3.14:1**. Any sibling that follows the old list gets it too,
+> which is why `-fg` is now in the list rather than in a note.
+>
+> ⚠ `--db-brand` itself stays correct on DARK and must not be replaced there —
+> 6.16:1 on the header navy, 5.16:1 on navy-600. The rule is narrow: the identity
+> colour is carried by the border, the fill and the wordmark, never by
+> letterforms on a light tint of itself.
+>
+> `api/tests/test_css_palette.py` enforces all of this against the token files
+> **and** `themes/*.css`, so a new brand fails CI rather than someone's audit.
 
 **Inherit (shared skeleton — this is what makes brands "compatible"; changing
 these breaks family resemblance):**

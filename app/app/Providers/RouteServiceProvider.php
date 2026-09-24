@@ -8,13 +8,19 @@ use Illuminate\Support\Facades\Route;
 class RouteServiceProvider extends ServiceProvider
 {
     /**
-     * This namespace is applied to your controller routes.
+     * ⚠⚠ THE CONTROLLER-NAMESPACE PREFIX IS GONE, AND IT IS NOW PROVABLY DEAD.
+     * It existed to turn `'Titles@main'` into `App\Http\Controllers\Titles@main`.
+     * #404 converted every string action in `routes/` to the array form, and
+     * measured 2026-09-18 there are **0 string-form actions and 0 `action()`
+     * helper calls** left in the tree — so the prefix has nothing to prefix.
      *
-     * In addition, it is set as the URL generator's root namespace.
+     * Laravel 8 deprecated this property and Laravel 9 REMOVES it, so leaving
+     * it is a blocker for the framework move (#382) rather than a convenience.
      *
-     * @var string
+     * ⚠ The proof that this is inert is `php artisan route:list`, byte-identical
+     * before and after: 140 registrations, same names, same resolved actions. A
+     * count alone cannot see a route moving.
      */
-    protected $namespace = 'App\Http\Controllers';
 
     /**
      * The path to the "home" route for your application.
@@ -59,7 +65,6 @@ class RouteServiceProvider extends ServiceProvider
     protected function mapWebRoutes()
     {
         Route::middleware('web')
-            ->namespace($this->namespace)
             ->group(base_path('routes/web.php'));
     }
 
@@ -74,7 +79,6 @@ class RouteServiceProvider extends ServiceProvider
     {
         Route::prefix('api')
             ->middleware('api')
-            ->namespace($this->namespace)
             ->group(base_path('routes/api.php'));
     }
 }

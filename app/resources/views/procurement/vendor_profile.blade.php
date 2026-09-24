@@ -667,7 +667,7 @@
                                 @foreach ($software as $sw)
                                     <tr>
                                         <td>
-                                            <a href="{{ route('research.digital-reform.license-family', ['slug' => $sw['slug']]) }}">{{ $sw['family'] }}</a>
+                                            <a href="{{ route('research.digital-reform.product-family', ['slug' => $sw['slug']]) }}">{{ $sw['family'] }}</a>
                                         </td>
                                         <td style="font-size: var(--db-text-sm); color: var(--db-text-secondary);">
                                             @if(!empty($sw['summary']))

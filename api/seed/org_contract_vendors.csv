@@ -1,0 +1,30 @@
+# Curated map: a wegov_orgs id -> the EXACT `contracts.vendor_name` under which
+# that organization is paid by the City.
+#
+# WHY THIS EXISTS. Some bodies on the org register are not City agencies and hold
+# no capital budget line, so every agency-keyed dataset renders empty for them —
+# but they DO appear in the procurement record, as VENDORS. The org profile had
+# no way to show that: it is keyed on `wegov-org-id`, and a contract identifies
+# its vendor only by free-text `vendor_name`.
+#
+# ⚠ THE THREE ROUTES THAT DO NOT REACH THEM, all measured 2026-09-02, which is
+# why this file exists rather than a derivation:
+#   1. `org_vendor_crosswalk` keys on a PASSPort supplier id, and NYCEDC has NO
+#      PASSPort vendor record at all (the registry holds Bushwick, Bronx Overall,
+#      Queens, Staten Island, South Bronx and Women's Housing EDCs, but not it).
+#   2. Exact name match fails: the register says "Economic Development
+#      Corporation", the contracts say "NEW YORK CITY ECONOMIC DEVELOPMENT
+#      CORPORATION". Only 17 live orgs match a vendor name exactly.
+#   3. ⚠⚠ FUZZY IS ACTIVELY WRONG HERE. The crosswalk's only held candidate for
+#      org 170010998 is supplier 1636203 — QUEENS ECONOMIC DEVELOPMENT
+#      CORPORATION, a different organization. It sits in `candidate_supplier_id`
+#      with `passport_supplier_id` NULL, so it cannot reach a page: the #146
+#      design working exactly as intended. Do not "improve" this with similarity.
+#
+# ⚠ EXACT vendor_name only, never a LIKE. `%ECONOMIC DEVELOPMENT CORP%` matches
+# SEVEN different organizations — Women's Housing (53 contracts), South Bronx
+# Overall (43), Staten Island (14), Queens (12), Central Brooklyn (9), Bronx
+# Overall (8) — and NYCEDC is only 24 of those 163. A substring here would
+# attribute $31M of another nonprofit's work to EDC.
+org_id,vendor_name,why
+170010998,"NEW YORK CITY ECONOMIC DEVELOPMENT CORPORATION","NYCEDC is a local development corporation, not a City agency — our register types it 'Public Benefit or Development Organization'. It appears 0 times as a contracting agency and 0 times in all three capital tables (whose 26 managing agencies are the bodies holding their own capital budget lines). Its City work reaches it as a vendor: 12 contracts worth $11,183.9M, all from the Department of Small Business Services, which is its oversight agency. NOTE 12 and not 24: `contracts` holds one row per AMENDMENT, and the raw row count is 24 / $12,315.7M. Amendments RESTATE a total rather than adding to it, so the honest figures are the deduped ones - the #278 defect, which shipped twice here."

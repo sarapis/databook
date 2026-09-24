@@ -2,7 +2,7 @@
 
 
 @section('head')
-	<meta name="description" content="A webpage for every NYC-funded infrastructure project" />
+	<meta name="description" content="A webpage for every NYC-funded capital project" />
 	<meta rel="canonical" href="{!! route('projects') !!}" />
 @endsection
 
@@ -13,28 +13,248 @@
 
 @section('content')
 
+@php
+	// ⚠⚠ THE PAGE COMPUTES NOTHING IT CAN BE SERVED. Every count below is a key
+	// the endpoint returned. Two independent computations of one number is the
+	// defect this whole capital rebuild exists to end — and on these two
+	// endpoints it was live: `?has_location=false` listed 12,464 projects while
+	// the map drew 4,560 pins for projects the list had excluded.
+	//
+	// ⚠ Conditional phrases are precomputed here because a Blade directive glued
+	// to a word character is not compiled and 500s the page.
+	$cl        = is_array($capList ?? null) ? $capList : [];
+	$clOk      = !empty($cl['available']);
+	$rows      = $cl['rows'] ?? [];
+	$total     = $cl['total'] ?? null;
+	$pages     = (int) ($cl['pages'] ?? 0);
+	$page      = (int) ($capPage ?? 1);
+	$perPage   = (int) ($cl['per_page'] ?? 50);
+
+	$opt       = is_array($capOptions ?? null) ? $capOptions : [];
+	$optFlags  = $opt['flags'] ?? [];
+	$programme = $optFlags['projects'] ?? null;
+
+	$f         = is_array($capFilters ?? null) ? $capFilters : [];
+	$fv        = function ($k) use ($f) { return $f[$k] ?? ''; };
+
+	$fmtN = function ($v) { return is_numeric($v) ? number_format((float) $v) : '—'; };
+	$fmtM = function ($v) {
+		if (!is_numeric($v)) return '—';
+		$v = (float) $v;
+		if (abs($v) >= 1000000000) return '$' . number_format($v / 1000000000, 2) . 'B';
+		if (abs($v) >= 1000000) return '$' . number_format($v / 1000000, 1) . 'M';
+		if (abs($v) >= 1000) return '$' . number_format($v / 1000, 0) . 'K';
+		return '$' . number_format($v);
+	};
+
+	// The row range this page shows, from the served page/per_page/total — never
+	// from count($rows), which would read "1-50 of 50" on the last page.
+	//
+	// ⚠⚠ A PAGE PAST THE END HAS NO RANGE, AND ARITHMETIC ALONE PRODUCES A LIE.
+	// `?page=99999` rendered "Showing 4,999,901–17,024" — a first row past the
+	// last row, over a list of 341 pages — because the formula is only valid
+	// where rows exist. The ceiling cannot be clamped before the request (the
+	// page count is only known from the response) and clamping it after would
+	// silently answer a different URL, so the page SAYS it is past the end.
+	$pastEnd  = $pages > 0 && $page > $pages;
+	$hasRows  = count($rows) > 0;
+	$firstRow = ($total && $hasRows) ? (($page - 1) * $perPage) + 1 : 0;
+	$lastRow  = ($total && $hasRows) ? min($page * $perPage, (int) $total) : 0;
+
+	// ⚠ Pagination links carry the CURRENT filters. Dropping them is how a
+	// reader lands on page 2 of a different question.
+	$pageUrl = function ($p) use ($f, $capSort, $capDirection) {
+		return route('projects') . '?' . http_build_query(array_merge($f, [
+			'sort' => $capSort, 'direction' => $capDirection, 'page' => $p,
+		]));
+	};
+	$anyFilter = count($f) > 0;
+
+	// ⚠ Counted from the rendered rows, so the sentence and the table cannot
+	// disagree. `countCell` writes a formatted number or the words "not
+	// tracked"; only the numeric ones are summed, and the dataset count is the
+	// number of rows shown either way — a dataset we cannot count is still a
+	// dataset we read.
+	$dsCount = count($datasets);
+	$dsRecords = 0;
+	foreach ($datasets as $ds_) {
+		$cell = $ds_[4] ?? '';
+		if (preg_match('/>([\d,]+)</', $cell, $mm))
+			$dsRecords += (int) str_replace(',', '', $mm[1]);
+	}
+
+	// ⚠⚠ PRECOMPUTED, BECAUSE A BLADE DIRECTIVE GLUED TO A WORD CHARACTER IS NOT
+	// COMPILED. The first draft of this sentence ended `... tracked@endif.` —
+	// Blade compiled the `@if` and left the `@endif` as literal text, and the
+	// page 500'd with "unexpected end of file". `php -l` passes on it either way,
+	// because the file is valid PHP whichever way Blade reads it. Conditional
+	// phrases live here.
+	$matchPhrase = $anyFilter ? 'projects match these filters' : 'projects tracked';
+	if ($anyFilter && is_numeric($programme))
+		$matchPhrase .= ', of ' . $fmtN($programme) . ' tracked';
+	$matchPhrase .= '.';
+	$showingPhrase = '';
+	if ($pastEnd)
+		$showingPhrase = 'Page ' . $fmtN($page) . ' is past the end of this list, which has ' . $fmtN($pages) . ' pages.';
+	elseif ($total && $hasRows)
+		$showingPhrase = 'Showing ' . $fmtN($firstRow) . '–' . $fmtN($lastRow) . '.';
+@endphp
+
 	<div class="inner_container">
 		<div class="container">
 			<div class="row justify-content-center">
 				<div class="col-md-12 organization_data pb-1">
 					<div class="db-eyebrow">Projects</div>
-					<h2>Capital Projects</h2>
-					<p class="lead">Capital Projects are managed by city agencies and use city  funds to produce, improve and maintain city infrastructure and assets like roads, sewers, schools and sanitation trucks, and more.</p>
+					<h1 class="db-profile-title">Capital Projects</h1>
+					<p class="lead">Capital projects are managed by city agencies and use city funds to produce, improve and maintain city infrastructure and assets like roads, sewers, schools and sanitation trucks, and more.</p>
+				</div>
+			</div>
+
+			@if (!$clOk)
+				{{-- ⚠ An unavailable section says so. A silently empty table reads
+				     as "the City has no capital projects". --}}
+				<div class="alert alert-secondary" role="alert">
+					The capital project list is not available right now.
+				</div>
+			@else
+
+			<div class="row mb-3">
+				<div class="col-12">
+					{{-- ⚠ The unfiltered form of this line — "17,024 projects tracked. Showing
+					     1–50." — was removed at the owner's request: on the default view it
+					     restates the tile above it and the pager below it.
+					     ⚠⚠ IT IS GATED, NOT DELETED, AND THE `$pastEnd` ARM IS THE REASON.
+					     `?page=99999` once rendered "Showing 4,999,901–17,024" — a first row
+					     past the last row — and the sentence saying the page is past the end
+					     is what replaced that lie. Dropping the whole block would bring it
+					     back on any unfiltered out-of-range page. The filtered count is kept
+					     too: there, "N match these filters, of 17,024 tracked" is the answer
+					     to the question the reader just asked. --}}
+					@if ($anyFilter || $pastEnd)
+						<p class="mb-1">
+							<strong>{{ $fmtN($total) }}</strong> {{ $matchPhrase }} {{ $showingPhrase }}
+						</p>
+					@endif
+					{{-- ⚠ A FILTER WITH NO CONTROL MUST STILL BE VISIBLE AND REMOVABLE.
+					     `budget_line` is set only by a link (from a budget-line page), so
+					     without this line the reader sees a narrowed list and no reason
+					     for it — and has no way back except editing the URL. --}}
+					@if ($fv('budget_line') !== '')
+						<p class="mb-1 small">
+							Filtered to budget line <strong>{{ $fv('budget_line') }}</strong>.
+							<a href="{!! route('projects') !!}?{!! http_build_query(array_diff_key($f, ['budget_line' => ''])) !!}">Remove this filter</a>
+						</p>
+					@endif
+					<p class="text-muted small mb-0">
+						Every figure on this page is read from Databook’s capital project spine, which is built from the current Capital Commitment Plan, the Capital Projects Dashboard and the 2023 project detail data. <a href="{!! route('capital') !!}">See the programme overview</a> for what each money measure means — they are six separate measures, not stages of one pot.
+					</p>
 				</div>
 			</div>
 
 
-			<div id="stats_collapse" class="collapse show mt-0 mb-3">
-				<div class="db-stat-grid">
-					<div class="db-stat"><div class="db-stat-label">Number of Projects</div><div class="db-stat-value prj_stat gs_thousandscomma" id="projects_no">&nbsp;</div></div>
-					<div class="db-stat"><div class="db-stat-label">Original Cost</div><div class="db-stat-value prj_stat gs_finshort" data-multiplier="1000" id="orig_cost">&nbsp;</div></div>
-					<div class="db-stat"><div class="db-stat-label">Current Cost</div><div class="db-stat-value prj_stat gs_finshort" data-multiplier="1000" id="curr_cost">&nbsp;</div></div>
-					<div class="db-stat is-accent"><div class="db-stat-label">Amount Over Budget</div><div class="db-stat-value prj_stat gs_finshort" data-multiplier="1000" id="over_budg_am">&nbsp;</div></div>
-				</div>
-			</div>
-					
+					{{-- ⚠⚠ MOVED HERE FROM /procurement (owner request). These tiles and
+					     the Checkbook capital-spend chart were added to a PROCUREMENT page
+					     on 2026-07-13, when no rebuilt capital section existed and
+					     CheckbookNYC published no capital feed. With /projects and
+					     /projects/about built they were simply the same figures in two
+					     places — which is what produced the 5,128-vs-12,929 disagreement
+					     this section has already paid for once.
+					     ⚠ Every tile states what it is OVER, because no two of the four
+					     share a denominator: the plan is 12,929 of 17,024 tracked, planned
+					     money covers 9,213 projects, spent 7,118, and a published schedule
+					     8,483 of all 17,024. Without those, the grid reads as 66% of the
+					     plan being scheduled where the truth is 51%. --}}
+        @php
+            // ⚠⚠ THESE TILES USED TO READ `globStats`, i.e. `cached_stats` over
+            // `capitalprojectsdollarscomp` — the series NYC RETIRED 2023-10-26.
+            // They showed 5,128 projects while the rebuilt /projects/capital
+            // showed 12,929, and the comment here claimed the two "match
+            // exactly". Two pages, one subject, different numbers.
+            //
+            // ⚠ `Amount Over Budget` is NOT reproduced. It is the label this
+            // repo documents as carrying two definitions — every row's budget
+            // difference globally, but only the negative ones per district —
+            // and the rebuilt Overview drops it rather than repointing it.
+            $pCap    = is_array($capital ?? null) ? $capital : [];
+            $pCapOk  = !empty($pCap['available']) && !empty($pCap['projects']);
+            $pSched  = $pCap['schedule'] ?? [];
+            $pMoney  = [];
+            foreach (($pCap['money']['measures'] ?? []) as $pm) {
+                $pMoney[$pm['key'] ?? ''] = $pm;
+            }
+            $pFmtN = function ($v) { return is_numeric($v) ? number_format((float) $v) : '—'; };
+            $pFmtB = function ($v) {
+                if (!is_numeric($v)) return '—';
+                $v = (float) $v;
+                if (abs($v) >= 1000000000) return '$' . number_format($v / 1000000000, 1) . 'B';
+                if (abs($v) >= 1000000) return '$' . number_format($v / 1000000, 1) . 'M';
+                return '$' . number_format($v);
+            };
+            $pPlanned = $pMoney['planned_usd']['value'] ?? null;
+            $pSpent   = $pMoney['spent_usd']['value'] ?? null;
 
-			
+            // >> THESE FOUR TILES MIXED TWO SCOPES SILENTLY, AND THE RATIO A
+            // READER FORMS FROM THEM WAS WRONG BY 15 POINTS. Tile 1 counts the
+            // 12,929 projects in the current plan; "with a published schedule"
+            // is 8,483 of ALL 17,024 tracked, of which only 6,561 are in the
+            // plan. Read together they say 66% of the plan is scheduled; the
+            // real figure is 51%, and 1,922 of the 8,483 are not in the plan at
+            // all. The money measures carry their own populations too (9,213
+            // planned, 7,118 spent) - none of these four is over the same set.
+            // So every tile now states what it is over, which is exactly what
+            // the Overview does with `population` per measure.
+            $pPlannedPop = $pMoney['planned_usd']['population'] ?? null;
+            $pSpentPop   = $pMoney['spent_usd']['population'] ?? null;
+            $pTracked    = $pCap['projects'] ?? null;
+            $pOfTracked  = is_numeric($pTracked) ? 'of ' . $pFmtN($pTracked) . ' tracked' : null;
+            $pOfProjects = function ($n) use ($pFmtN) {
+                return is_numeric($n) ? $pFmtN($n) . ' projects' : null;
+            };
+        @endphp
+        @if ($pCapOk)
+        <div class="db-stat-grid mb-4">
+            <a href="{{ route('capital') }}" class="db-stat" style="text-decoration:none;">
+                <div class="db-stat-label">Projects in the current plan</div>
+                <div class="db-stat-value">{{ $pFmtN($pCap['in_current_plan'] ?? null) }}</div>
+                @if($pOfTracked)<div class="db-stat-sub">{{ $pOfTracked }}</div>@endif
+            </a>
+            <a href="{{ route('capital') }}" class="db-stat" style="text-decoration:none;">
+                <div class="db-stat-label">Planned commitments</div>
+                <div class="db-stat-value">{{ $pFmtB($pPlanned) }}</div>
+                @if($pOfProjects($pPlannedPop))<div class="db-stat-sub">{{ $pOfProjects($pPlannedPop) }}</div>@endif
+            </a>
+            <a href="{{ route('capital') }}" class="db-stat is-accent" style="text-decoration:none;">
+                <div class="db-stat-label">Spent</div>
+                <div class="db-stat-value">{{ $pFmtB($pSpent) }}</div>
+                @if($pOfProjects($pSpentPop))<div class="db-stat-sub">{{ $pOfProjects($pSpentPop) }}</div>@endif
+            </a>
+            <a href="{{ route('capital') }}" class="db-stat" style="text-decoration:none;">
+                <div class="db-stat-label">With a published schedule</div>
+                <div class="db-stat-value">{{ $pFmtN($pSched['with_published_schedule'] ?? null) }}</div>
+                @if($pOfTracked)<div class="db-stat-sub">{{ $pOfTracked }}</div>@endif
+            </a>
+        </div>
+        {{-- ⚠ Planned and spent are two of SIX separate measures that do not sum
+             or nest; the Overview carries all six with their populations and the
+             note explaining why. Showing two here without that link would invite
+             exactly the subtraction the note exists to prevent. --}}
+        <p class="small text-muted mb-4">
+            Planned commitments and spending are two of six separate measures the
+            City publishes; they do not sum or nest.
+            <a href="{{ route('capital') }}">See all six, with what each covers</a>.
+        </p>
+        @else
+        <div class="alert alert-secondary" role="alert">
+            Capital programme figures are not available right now.
+        </div>
+        @endif
+        {{-- Actual capital spending by fiscal year — Checkbook 'Capital Contracts' payments (cash paid out; distinct from the CPDB budget/cost figures above) --}}
+        @if(!empty($capitalSpend['values']))
+        <div class="db-card mb-5" style="overflow:hidden; padding:var(--db-space-4);">
+            <div class="db-chart-head"><span class="db-chart-title">Actual Capital Spending by Fiscal Year @include('procurement.partials.source_badge', ['source' => 'checkbook'])</span></div>
+            <div class="db-chart-body" style="height: 280px;"><canvas id="capitalSpendChart"></canvas></div>
+        </div>
+        @endif
 
 		<div class="row">
 				<div id="map_container" class="col-12 mb-0 position-relative" style="min-height:540px!important;">
@@ -43,115 +263,364 @@
 					<!-- Map-scoped loading overlay (not the full-page .loading) -->
 					<div id="mapLoadingOverlay" style="display:none; position:absolute; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.55); z-index:400; align-items:center; justify-content:center; flex-direction:column; border-radius:8px;">
 						<div style="width:40px; height:40px; border:3px solid rgba(255,255,255,0.3); border-top-color:#fff; border-radius:50%; animation:mapSpin 0.8s linear infinite;"></div>
-						<div style="color:#fff; margin-top:12px; font-size:14px; font-weight:500;">Loading 5,000+ capital projects&hellip;</div>
+						<div style="color:#fff; margin-top:12px; font-size:14px; font-weight:500;">Loading project locations&hellip;</div>
 					</div>
 					<style>@keyframes mapSpin { to { transform: rotate(360deg); } }</style>
 
-					
-					<!-- In-Map Toggle Button -->
-					<button id="mapFilterToggle" class="map-filter-toggle-btn" type="button" onclick="toggleMapFilterPanel()">
-						<i class="bi bi-funnel me-1"></i> Filters & Layers
-					</button>
-					
-					<!-- In-Map Filter Panel -->
-					<div id="mapFilterPanel" class="map-filter-panel" style="display: none;">
-						<div class="map-filter-header">
-							<h6 class="mb-0"><i class="bi bi-funnel me-2"></i>Filters & Layers</h6>
-							<button type="button" class="btn-close btn-close-white btn-sm" onclick="toggleMapFilterPanel()"></button>
-						</div>
-						<div class="map-filter-body">
-							<!-- Search Section -->
-							<div class="mb-3">
-								<div class="filter-section-title"><i class="bi bi-search me-1"></i> Search</div>
-								<div class="input-group input-group-sm flex-nowrap mb-2">
-									<span class="input-group-text"><i class="bi bi-geo-alt"></i></span>
-									<input id="addrSearch" type="text" class="form-control" placeholder="Search by address..." onkeydown="addrSearchKeyPress(this)" autocomplete="off">
-									<button class="btn btn-outline-light" type="button" id="addrSearchBtn" onclick="addrSearch();"><i class="bi bi-arrow-right"></i></button>
-								</div>
-								<div class="input-group input-group-sm flex-nowrap">
-									<span class="input-group-text"><i class="bi bi-hash"></i></span>
-									<input id="idSearch" type="text" class="form-control" placeholder="Search by project ID..." onkeydown="idSearchKeyPress(this)" autocomplete="off">
-									<button class="btn btn-outline-light" type="button" id="idSearchBtn" onclick="idSearch();"><i class="bi bi-arrow-right"></i></button>
-								</div>
-							</div>
-							
-							<hr class="my-2">
-							
-							<!-- Agency Filter -->
-							<div class="mb-3">
-								<div class="filter-section-title"><i class="bi bi-building me-1"></i> Managing Agency</div>
-								<div id="agcyflt_controls" class="filter-options-list"></div>
-							</div>
-							<!-- Project Type Filter -->
-							<div class="mb-3">
-								<div class="filter-section-title"><i class="bi bi-folder me-1"></i> Project Type</div>
-								<div id="typeflt_controls" class="filter-options-list"></div>
-							</div>
-							<hr class="my-2">
-							<!-- District Boundaries -->
-							<div class="mb-2">
-								<div class="filter-section-title"><i class="bi bi-map me-1"></i> District Boundaries</div>
-								<div class="filter-options-list">
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="cd-switch"><label class="form-check-label small" for="cd-switch">Community Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="ed-switch"><label class="form-check-label small" for="ed-switch">Election Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="pp-switch"><label class="form-check-label small" for="pp-switch">Police Precincts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="dsny-switch"><label class="form-check-label small" for="dsny-switch">Sanitation Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="fb-switch"><label class="form-check-label small" for="fb-switch">Fire Battalion</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="sd-switch"><label class="form-check-label small" for="sd-switch">School Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="hc-switch"><label class="form-check-label small" for="hc-switch">Health Center Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="cc-switch"><label class="form-check-label small" for="cc-switch">City Council Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="nycongress-switch"><label class="form-check-label small" for="nycongress-switch">Congressional Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="sa-switch"><label class="form-check-label small" for="sa-switch">State Assembly Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="ss-switch"><label class="form-check-label small" for="ss-switch">State Senate Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="bid-switch"><label class="form-check-label small" for="bid-switch">Business Improvement Districts</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="nta-switch"><label class="form-check-label small" for="nta-switch">Neighborhood Tabulation Areas</label></div>
-									<div class="form-check form-switch form-check-sm"><input type="checkbox" class="form-check-input" id="zipcode-switch"><label class="form-check-label small" for="zipcode-switch">Zip Codes</label></div>
-								</div>
-							</div>
+					{{-- Address search, top-left — the same overlay pattern /districts
+					     uses, replacing the combined "Search & Layers" flyout. --}}
+					<div class="db-map-search" style="top: var(--db-space-2); left: var(--db-space-2);">
+						<i class="bi bi-search"></i>
+						<input id="addrSearch" type="text" placeholder="Search an address…" aria-label="Enter address to find capital projects" onkeydown="addrSearchKeyPress(this)" autocomplete="off">
+						<button class="db-map-search-go" id="addrSearchBtn" type="button" onclick="addrSearch();" data-bs-toggle="popover" data-content="" data-placement="bottom" data-trigger="manual" aria-label="Search address"><i class="bi bi-arrow-right"></i></button>
+					</div>
+
+					{{-- Boundary overlays, top-right.
+					     ⚠ THE SWITCH IDS ARE LOAD-BEARING AND UNCHANGED. `script.js`
+					     binds each layer by ID — `$('#'+code+'-switch').change(...)` —
+					     so renaming one silently stops that boundary toggling while the
+					     control still looks fine.
+					     ⚠ The `<hr>` in each row is not decoration: the same helper does
+					     `$('label[for="'+code+'-switch"] hr').attr('style', 'background-color: …')`
+					     to paint the layer's colour swatch. The old panel had no `<hr>`,
+					     so this page has been showing boundary toggles with no colour key
+					     at all. --}}
+					<div class="db-map-control" id="boundaries-control" style="top: var(--db-space-2); right: var(--db-space-2);">
+						<button type="button" class="db-btn db-btn-outline db-btn-sm" id="boundaries-toggle" aria-haspopup="true" aria-expanded="false" style="background:#fff;">
+							<i class="bi bi-bounding-box-circles"></i> Show District Boundaries <i class="bi bi-chevron-down db-caret"></i>
+						</button>
+						<div class="db-map-control-menu" id="boundaries_controls">
+							<p class="db-map-control-label">Overlay boundaries</p>
+							@php
+								$boundaryLayers = [
+									'cd' => 'Community Districts',
+									'ed' => 'Election Districts',
+									'pp' => 'Police Precincts',
+									'dsny' => 'Sanitation Districts',
+									'fb' => 'Fire Battalions',
+									'sd' => 'School Districts',
+									'hc' => 'Health Center Districts',
+									'cc' => 'City Council Districts',
+									'nycongress' => 'Congressional Districts',
+									'sa' => 'State Assembly Districts',
+									'ss' => 'State Senate Districts',
+									'bid' => 'Business Improvement Districts',
+									'nta' => 'Neighborhood Tabulation Areas',
+									'zipcode' => 'Zip Code',
+								];
+							@endphp
+							@foreach ($boundaryLayers as $code => $label)
+								<label class="db-map-control-row" for="{{ $code }}-switch">
+									<input type="checkbox" id="{{ $code }}-switch">
+									<span>{{ $label }}</span>
+									<hr class="border-sample db-map-swatch">
+								</label>
+							@endforeach
 						</div>
 					</div>
 				</div>
 				</div>
-			</div>
+
+				{{-- ⚠⚠ THE LEGEND IS THE ENDPOINT'S OWN `coverage.note`, RENDERED
+				     VERBATIM BY THE MAP CALLBACK — never a sentence typed here with
+				     numbers in it. A typed denominator is the defect this repo has
+				     shipped repeatedly ("the largest 20 families — 88.0% of value"
+				     against a computed 87.7%), and here it would go stale the moment
+				     any filter is applied. It is empty until the map answers, and it
+				     says so. --}}
+				<div class="row mt-2 mb-4">
+					<div class="col-12">
+						<p id="mapCoverageNote" class="text-muted small mb-1">Loading project locations&hellip;</p>
+						<div id="mapLegend" class="small" style="display:none;">
+							<span class="me-3"><strong>Phase:</strong></span>
+							<span class="me-3"><span class="db-map-key" style="background:#ff7c7c"></span> Pre-Design</span>
+							<span class="me-3"><span class="db-map-key" style="background:#78c0a8"></span> Design</span>
+							<span class="me-3"><span class="db-map-key" style="background:#beedb9"></span> Construction Procurement</span>
+							<span class="me-3"><span class="db-map-key" style="background:#36c726"></span> Construction</span>
+							<span class="me-3"><span class="db-map-key" style="background:#f2c45a"></span> Close-out</span>
+							<span class="me-3"><span class="db-map-key" style="background:#53777a"></span> No schedule published</span>
+						</div>
+						<style>.db-map-key{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:middle;margin-right:4px;}</style>
+					</div>
+				</div>
 
 		</div>
-		
+
 		<div class="container">
 			<div class="inner_container">
-				<div class="row my-4">
-					<div id="data_container_accordion" class="col-12 accordion">
-					
-						<div class="accordion social_media" id="accordionThree">
-							<div>
-								<div id="headingThree">
-									<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-										We’re using normalized data from <span id="total_datasets"></span> datasets containing <span id="total_records"></span> records. Click here to learn more.
-									</button>
-								</div>
-								<div id="collapseThree" class="collapse hide" aria-labelledby="headingOne" data-parent="#accordionThree">
-									<div class="card-text table-responsive">
-										<table id="dsStatsTable" class="db-table display table-hover table-borderless" style="width:100%;">
-										</table>
-									</div>
-								</div>
-							</div>
+
+				{{-- ================= FILTERS ================= --}}
+				<form method="GET" action="{!! route('projects') !!}" class="row g-2 align-items-end mb-3" id="capFilterForm">
+					{{-- ⚠⚠ A GET FORM SUBMITS ONLY ITS OWN FIELDS, so a filter that arrives
+					     in the URL and has no control here is SILENTLY DROPPED the moment
+					     the reader touches any other filter. `budget_line` has no control
+					     on purpose — there are 1,913 of them — so it travels as a hidden
+					     field. This is the same rule as "pagination links carry the current
+					     filters", one submit button over. --}}
+					@if($fv('budget_line') !== '')
+						<input type="hidden" name="budget_line" value="{{ $fv('budget_line') }}">
+					@endif
+					<div class="col-md-3">
+						<label class="form-label small mb-1" for="fq">Search descriptions</label>
+						<input class="form-control form-control-sm" type="search" id="fq" name="q" value="{{ $fv('q') }}" placeholder="e.g. reconstruction" autocomplete="off">
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-1" for="fagency">Managing agency</label>
+						<select class="form-select form-select-sm" id="fagency" name="agency">
+							<option value="">All agencies</option>
+							{{-- ⚠⚠ THIS LIST WAS TWO VOCABULARIES — 34 agencies with names and 21
+							     bare FMS codes labelled with themselves, because `agency_acro` is
+							     NULL on the 4,095 projects outside the current plan. `850` was the
+							     THIRD-LARGEST entry and named nothing, and choosing
+							     "Department of Parks and Recreation" returned 2,798 of its 3,429
+							     projects. The endpoint resolves a code to its agency wherever the
+							     code carries exactly one, so 55 options became 31 and they sum to
+							     the whole spine. ⚠ `801` is deliberately still a code: it is three
+							     organisations (SBS, Brooklyn Navy Yard, Trust for Governors
+							     Island) and its 121 unnamed rows belong to one of them. --}}
+							@foreach($opt['agencies'] ?? [] as $a)
+								<option value="{{ $a['value'] }}" {{ $fv('agency') === $a['value'] ? 'selected' : '' }}>{{ $a['label'] }} ({{ $fmtN($a['n']) }})</option>
+							@endforeach
+						</select>
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-1" for="fborough">Borough</label>
+						<select class="form-select form-select-sm" id="fborough" name="borough">
+							<option value="">All boroughs</option>
+							@foreach($opt['boroughs'] ?? [] as $b)
+								@if($b['value'] !== '')
+									<option value="{{ $b['value'] }}" {{ strtoupper($fv('borough')) === $b['value'] ? 'selected' : '' }}>{{ ucwords(strtolower($b['value'])) }} ({{ $fmtN($b['n']) }})</option>
+								@endif
+							@endforeach
+						</select>
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-1" for="fcategory">Asset category</label>
+						<select class="form-select form-select-sm" id="fcategory" name="category">
+							<option value="">All categories</option>
+							@foreach($opt['categories'] ?? [] as $c)
+								@if($c['value'] !== '')
+									<option value="{{ $c['value'] }}" {{ $fv('category') === $c['value'] ? 'selected' : '' }}>{{ $c['value'] }} ({{ $fmtN($c['n']) }})</option>
+								@endif
+							@endforeach
+						</select>
+					</div>
+
+					<div class="col-md-3">
+						<label class="form-label small mb-1" for="fphase">Phase or status</label>
+						{{-- ⚠⚠ TWO VOCABULARIES WERE MIXED IN ONE FLAT LIST, ORDERED BY COUNT,
+						     so `(Pending)` at 1,854 led a dropdown labelled "Phase or status"
+						     and `Construction` at 825 sat fourth. Measured 2026-09-10: **5** of
+						     the 39 options are the phases the City publishes a schedule for
+						     (Pre-Design, Design, Construction Procurement, Construction,
+						     Close-out); the other **34** are parenthesised NON-phases meaning
+						     "no schedule is required".
+						     ⚠ The split is READ FROM THE PAYLOAD (`is_standard`), never
+						     re-derived here from the brackets — the endpoint owns it, and a
+						     second rule spelled in a template is how two lists of one thing
+						     come to disagree.
+						     ⚠⚠ THEY ARE GROUPED, NEVER MERGED. `(Construction)` 18 is NOT
+						     `Construction` 825 — the parentheses are the publisher's own mark
+						     that no schedule applies, so collapsing them would be a judgement
+						     about what the City meant, not a normalisation. The only safe
+						     collapse is case, and the endpoint already does it
+						     (`Construction Procurement` 317 + `Construction procurement` 6 =
+						     one option worth 323).
+						     ⚠ The labels keep their published spelling, parentheses included.
+						     The endpoint's own comment says the label is a representative
+						     stored spelling and never a re-cased invention; stripping the
+						     brackets here would be this page correcting a publisher it is
+						     quoting. The optgroup says what they mean instead. --}}
+						@php
+							$phaseOpts = $opt['phases'] ?? [];
+							$phStd = array_values(array_filter($phaseOpts, function ($p) { return !empty($p['is_standard']); }));
+							$phOther = array_values(array_filter($phaseOpts, function ($p) { return empty($p['is_standard']); }));
+						@endphp
+						<select class="form-select form-select-sm" id="fphase" name="phase">
+							<option value="">Any phase or status</option>
+							@if($phStd)
+								<optgroup label="Phase &mdash; the City publishes a schedule">
+									@foreach($phStd as $p)
+										<option value="{{ $p['label'] }}" {{ strtolower($fv('phase')) === strtolower($p['label']) ? 'selected' : '' }}>{{ $p['label'] }} ({{ $fmtN($p['n']) }})</option>
+									@endforeach
+								</optgroup>
+							@endif
+							@if($phOther)
+								<optgroup label="Status &mdash; no schedule is required">
+									@foreach($phOther as $p)
+										<option value="{{ $p['label'] }}" {{ strtolower($fv('phase')) === strtolower($p['label']) ? 'selected' : '' }}>{{ $p['label'] }} ({{ $fmtN($p['n']) }})</option>
+									@endforeach
+								</optgroup>
+							@endif
+						</select>
+					</div>
+					<div class="col-md-2">
+						<label class="form-label small mb-1" for="fin_plan">Current plan</label>
+						<select class="form-select form-select-sm" id="fin_plan" name="in_plan">
+							<option value="">Either</option>
+							<option value="1" {{ $fv('in_plan') === 'true' ? 'selected' : '' }}>In the plan ({{ $fmtN($optFlags['in_plan'] ?? null) }})</option>
+							<option value="0" {{ $fv('in_plan') === 'false' ? 'selected' : '' }}>Dropped ({{ $fmtN($optFlags['not_in_plan'] ?? null) }})</option>
+						</select>
+					</div>
+					<div class="col-md-2">
+						<label class="form-label small mb-1" for="fhas_schedule">Schedule</label>
+						<select class="form-select form-select-sm" id="fhas_schedule" name="has_schedule">
+							<option value="">Either</option>
+							<option value="1" {{ $fv('has_schedule') === 'true' ? 'selected' : '' }}>Published ({{ $fmtN($optFlags['has_schedule'] ?? null) }})</option>
+							<option value="0" {{ $fv('has_schedule') === 'false' ? 'selected' : '' }}>None ({{ $fmtN($optFlags['no_schedule'] ?? null) }})</option>
+						</select>
+					</div>
+					<div class="col-md-2">
+						<label class="form-label small mb-1" for="fhas_location">Location</label>
+						<select class="form-select form-select-sm" id="fhas_location" name="has_location">
+							<option value="">Either</option>
+							<option value="1" {{ $fv('has_location') === 'true' ? 'selected' : '' }}>Published ({{ $fmtN($optFlags['has_location'] ?? null) }})</option>
+							<option value="0" {{ $fv('has_location') === 'false' ? 'selected' : '' }}>None ({{ $fmtN($optFlags['no_location'] ?? null) }})</option>
+						</select>
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-1" for="fsort">Sort by</label>
+						<div class="input-group input-group-sm">
+							<select class="form-select form-select-sm" id="fsort" name="sort">
+								@foreach(['planned' => 'Planned commitments', 'adopted' => 'Adopted budget', 'committed' => 'Committed', 'spent' => 'Spent', 'agency' => 'Agency', 'id' => 'Project ID'] as $k => $lbl)
+									<option value="{{ $k }}" {{ $capSort === $k ? 'selected' : '' }}>{{ $lbl }}</option>
+								@endforeach
+							</select>
+							<select class="form-select form-select-sm" id="fdirection" name="direction" aria-label="Sort direction">
+								<option value="desc" {{ $capDirection === 'desc' ? 'selected' : '' }}>High → low</option>
+								<option value="asc" {{ $capDirection === 'asc' ? 'selected' : '' }}>Low → high</option>
+							</select>
 						</div>
+					</div>
+					<div class="col-md-3">
+						<button type="submit" class="btn btn-sm btn-primary">Apply filters</button>
+						@if($anyFilter)<a href="{!! route('projects') !!}" class="btn btn-sm btn-outline-secondary">Clear</a>@endif
+					</div>
+				</form>
+
+				{{-- ================= TABLE ================= --}}
+				<div class="table-responsive">
+					<table class="db-table table table-hover" id="capProjectsTable" style="width:100%;">
+						<thead>
+							<tr>
+								<th scope="col">Project</th>
+								<th scope="col">Agency</th>
+								<th scope="col">Category</th>
+								<th scope="col">Phase</th>
+								<th scope="col" class="text-end">Planned</th>
+								<th scope="col" class="text-end">Committed</th>
+								<th scope="col" class="text-end">Spent</th>
+								<th scope="col">Location</th>
+							</tr>
+						</thead>
+						<tbody>
+						@forelse($rows as $r)
+							@php
+								// ⚠ THE CANONICAL URL ID IS THE AGENCY-CONCATENATED FORM.
+								// A bare FMS id does not identify a project — 1,160 ids are
+								// carried by more than one agency across 2,371 rows — so a
+								// link built from `fms_id` alone can send a reader to
+								// another agency's project under this one's number.
+								$pid  = ($r['agency_key'] ?? '') . ($r['fms_id'] ?? '');
+								$desc = trim((string) ($r['description'] ?? '')) ?: ($r['fms_id'] ?? 'Untitled project');
+								$purl = '/p/' . rawurlencode($pid) . '_' . \Illuminate\Support\Str::slug($desc);
+							@endphp
+							<tr>
+								<td>
+									<a href="{{ $purl }}">{{ $desc }}</a>
+									<div class="text-muted small">{{ $pid }}@if(!($r['in_current_plan'] ?? false)) · <span class="db-badge db-badge-neutral">not in the current plan</span>@endif</div>
+								</td>
+								<td>
+									@if(!empty($r['wegov_org_id']))
+										<a href="/o/{{ $r['wegov_org_id'] }}-{{ \Illuminate\Support\Str::slug($r['agency_name'] ?? $r['agency_acro'] ?? '') }}/projects">{{ $r['agency_acro'] ?? $r['agency_key'] }}</a>
+									@else
+										{{ $r['agency_acro'] ?? $r['agency_key'] }}
+									@endif
+								</td>
+								<td>{{ $r['type_category'] ?? '—' }}</td>
+								<td>{{ $r['current_phase'] ?? 'Not published' }}</td>
+								<td class="text-end">{{ $fmtM($r['planned_total_usd'] ?? null) }}</td>
+								<td class="text-end">{{ $fmtM($r['commit_total_usd'] ?? null) }}</td>
+								<td class="text-end">{{ $fmtM($r['spent_total_usd'] ?? null) }}</td>
+								<td>{{ ($r['has_location'] ?? false) ? ($r['borough'] ?: 'Mapped') : 'Not published' }}</td>
+							</tr>
+						@empty
+							<tr><td colspan="8" class="text-center text-muted py-4">{{ $pastEnd ? 'There is no page ' . $fmtN($page) . '.' : 'No project matches these filters.' }} @if($pastEnd)<a href="{{ $pageUrl(1) }}">Go to the first page</a>@endif</td></tr>
+						@endforelse
+						</tbody>
+					</table>
+				</div>
+
+				{{-- ================= PAGINATION =================
+				     ⚠⚠ A DISABLED CONTROL RENDERS A `<span>`, NEVER AN `<a>` (#321).
+				     The old markup put `disabled` on the `<li>` and left a live href
+				     on the `<a>` inside it; a CSS class never stopped a crawler, so
+				     "Previous" from page 1 linked to page 0, from 0 to -1, downward
+				     with no floor — 453 requests carrying a negative page in one
+				     10-minute window, and a 1.2 GB cache. The controller floors and
+				     casts as well; one half alone is useless. --}}
+				@if($pages > 1)
+				<nav aria-label="Project list pages" class="mt-3">
+					<ul class="pagination pagination-sm">
+						@if($page > 1)
+							<li class="page-item"><a class="page-link" href="{{ $pageUrl($page - 1) }}">Previous</a></li>
+						@else
+							<li class="page-item disabled"><span class="page-link">Previous</span></li>
+						@endif
+						<li class="page-item disabled"><span class="page-link">Page {{ $fmtN($page) }} of {{ $fmtN($pages) }}</span></li>
+						@if($page < $pages)
+							<li class="page-item"><a class="page-link" href="{{ $pageUrl($page + 1) }}">Next</a></li>
+						@else
+							<li class="page-item disabled"><span class="page-link">Next</span></li>
+						@endif
+					</ul>
+				</nav>
+				@endif
+
+				@endif {{-- $clOk --}}
+
+				<div class="row my-4">
+					{{-- ⚠ ONE SHELL, from `<x-db.data-provenance>`. Fifteen views hand-rolled this
+					     accordion and thirteen also hand-rolled `loadTableStat()`, which
+					     fetched a route that has never existed and then DELETED the rows it
+					     had just rendered. --}}
+					<div class="col-12">
+						<x-db.data-provenance :datasets="$datasets" :count="$dsCount" :records="$dsRecords" />
+					</div>
 					</div>
 				</div>
 			</div>
 		</div>
-		
+
 	</div>
-	
+
 	<script type="text/javascript" language="javascript" src="https://cdn.datatables.net/buttons/1.6.5/js/dataTables.buttons.min.js"></script>
 	<script type="text/javascript" language="javascript" src="https://cdn.datatables.net/buttons/1.6.5/js/buttons.colVis.min.js"></script>
 	<link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/buttons/1.6.5/css/buttons.dataTables.min.css"/>
 	<script src="https://typeahead.js.org/releases/latest/typeahead.bundle.js"></script>
-	
+
 	<script>
-		var globfilter = []
-		var idSearchData = []
-		
+		// ⚠⚠ THE MAP'S URL IS BUILT BY THE CONTROLLER FROM THE SAME ARRAY THE LIST
+		// REQUEST USED. The page never assembles its own filter string — that is
+		// the second computation that let the map and the table disagree.
+		var CAP_GEOJSON_URL = '{!! $capGeojsonUrl !!}';
+
+		// Colour by the five standard phases the Dashboard publishes. Everything
+		// else it emits is a parenthesised status meaning "no schedule required",
+		// so it shares one neutral colour rather than being drawn as a phase.
+		const CAP_PHASE_COLORS = {
+			'pre-design': '#ff7c7c',
+			'design': '#78c0a8',
+			'construction procurement': '#beedb9',
+			'construction': '#36c726',
+			'close-out': '#f2c45a'
+		};
+
+		function capPhaseColor(phase) {
+			if (!phase) return '#53777a';
+			return CAP_PHASE_COLORS[String(phase).trim().toLowerCase()] || '#53777a';
+		}
+
 		function getBounds(coords, bounds) {		// recursively walks over multilevel object calculating leaves-points coords
 			if (typeof coords[0][0] == 'object')
 				return coords.reduce(function (bounds, subcoords) {
@@ -177,40 +646,27 @@
 
 		function mapPopup(e) {
 			var obj = e.features[0].properties;
-			//console.log('mapPopup', obj);
+			var pid = (obj.agency_key || '') + (obj.fms_id || '');
+			var desc = obj.description || pid;
+			var money = (obj.planned_usd === null || obj.planned_usd === undefined || obj.planned_usd === '')
+				? 'Not published' : toFinShortK(parseFloat(obj.planned_usd) / 1000, 1);
 			var description = `<table><tbody>
-				<tr><th scope="row">Name</th><td><a href="/p/${obj.PRJ_ID}_${slug(obj.NAME)}">${obj.NAME}</a></td></tr>
-				<tr><th scope="row">Current Phase</th><td>${obj.CURRENT_PHASE}</td></tr>
-				<tr><th scope="row">Agency</th><td><a href="/o/${obj.AGENCY_ID}-${slug(obj.AGENCY)}/projects">${obj.AGENCY}</a></td></tr>
- 				<tr><th scope="row">Category</th><td>${obj.CATEGORY}</td></tr>
-				<tr><th scope="row" class="pr-2">Planned Cost</th><td data-content="${toFin(obj.PLANNEDCOST.replaceAll(',', ''), 1)}">${toFinShortK(obj.PLANNEDCOST.replaceAll(',', ''), 1)}</td></tr>
-				<tr><th scope="row">Start</th><td>${obj.START_ORIG}</td></tr>
-				<tr><th scope="row">End</th><td>${obj.END_CURR}</td></tr>
+				<tr><th scope="row">Project</th><td><a href="/p/${encodeURIComponent(pid)}_${slug(desc)}">${desc}</a></td></tr>
+				<tr><th scope="row">Agency</th><td>${obj.agency || ''}</td></tr>
+				<tr><th scope="row">Category</th><td>${obj.category || 'Not published'}</td></tr>
+				<tr><th scope="row">Phase</th><td>${obj.phase || 'Not published'}</td></tr>
+				<tr><th scope="row">Planned commitments</th><td>${money}</td></tr>
+				<tr><th scope="row">Pin</th><td>${obj.geometry_kind === 'polygon' ? 'Centroid of the published outline, not an address' : 'Published point'}</td></tr>
 			</tbody></table>`;
 
-			
-			// Some features have missing/zero W/S/E/N bounds. fitBounds() on those
-			// produces an invalid box → the map zooms out to [0,0] and renders gray.
-			// Guard: only fit when all four bounds are finite & non-zero, else just
-			// recenter gently on the clicked point.
 			var W = parseFloat(obj.W), S = parseFloat(obj.S), E = parseFloat(obj.E), N = parseFloat(obj.N);
 			if ([W, S, E, N].every(Number.isFinite) && (W || S || E || N)) {
-				map.fitBounds([
-					[W, S],
-					[E, N]
-				], {
-					padding: [50, 50],
-					maxZoom: 18,
-					duration: 1000,
-					animate: true,
-					essential: true,
+				map.fitBounds([[W, S], [E, N]], {
+					padding: [50, 50], maxZoom: 16, duration: 1000, animate: true, essential: true,
 				});
 			} else {
 				map.easeTo({
-					center: e.lngLat,
-					zoom: Math.max(map.getZoom(), 14),
-					duration: 1000,
-					essential: true,
+					center: e.lngLat, zoom: Math.max(map.getZoom(), 14), duration: 1000, essential: true,
 				});
 			}
 
@@ -222,7 +678,6 @@
 				.setHTML(description)
 				.addTo(map);
 			initPopovers();
-			//e.stopPropagation();
 		}
 
 
@@ -231,7 +686,7 @@
 				addrSearch();
 			}
 		}
-		
+
 		function addrSearch() {
 			var addr = $('#addrSearch').val()
 			if (!addr || (addr.length < 6)) {
@@ -256,18 +711,13 @@
 							<tr><th scope="row">Community District</th>
 								<td>
 									<a href="/d/cd-${r.communityDistrict}-community-district-${r.communityDistrict}/city-council-discretionary">${r.communityDistrict}</a>
-									<a id="cd-agency" style="display:none;" target="_blank"><i class="bi bi-link-45deg"></i></a>
-									<a id="cd-url" style="display:none;" target="_blank"><i class="bi bi-box-arrow-up-right"></i></a>
 								</td>
 							</tr>
 							<tr><th scope="row">City Council District</th>
 								<td>
 									<a href="/d/cc-${r.cityCouncilDistrict.replace(/^0+/g, '')}-city-council-district-${r.cityCouncilDistrict.replace(/^0+/g, '')}/city-council-discretionary">${r.cityCouncilDistrict}</a>
-									<a id="cc-agency" style="display:none;" target="_blank"><i class="bi bi-link-45deg"></i></a>
-									<a id="cc-url" style="display:none;" target="_blank"><i class="bi bi-box-arrow-up-right"></i></a>
 								</td>
 							</tr>
-							{{--<tr><th scope="row">Neighborhood (NTA)</th><td><a href="/d/nta-${r.nta}-${r.nta}/city-council-discretionary">${r.nta}</a></td></tr>--}}
 							<tr><th scope="row">School District</th>
 								<td>
 									<a href="/d/sd-${r.communitySchoolDistrict}-community-school-district-${r.communitySchoolDistrict}/schools">${r.communitySchoolDistrict}</a>
@@ -285,14 +735,10 @@
 						</tbody></table>`
 
 					map.fitBounds([
-						[r.longitude - 0.002,r.latitude - 0.0005], // southwestern corner of the bounds
-						[r.longitude + 0.002,r.latitude + 0.0035] // northeastern corner of the bounds
+						[r.longitude - 0.002,r.latitude - 0.0005],
+						[r.longitude + 0.002,r.latitude + 0.0035]
 					], {
-						padding: [50, 50],
-						maxZoom: 15,
-						duration: 1500,
-						animate: true,
-						essential: true,
+						padding: [50, 50], maxZoom: 15, duration: 1500, animate: true, essential: true,
 					})
 
 					if (popup)
@@ -307,27 +753,63 @@
 			});
 		}
 
-		function idSearchKeyPress() {
-			if(event.key === 'Enter') {
-				idSearch();
-			}
-		}
+		// ⚠⚠ THE FETCH AND THE MAP'S STYLE LOAD ARE A RACE, AND THE OLD PAGE HID
+		// IT BEHIND ITS OWN SLOWNESS. `projectsMapInit()` adds the `route` source
+		// inside mapbox's `load` event; `drawCapitalMap()` calls
+		// `projectsMapDrawFeatures`, which does `map.getSource('route').setData`.
+		// The old page fetched 13.7 MB, so the style always won and the race was
+		// invisible. A 1.68 MB centroid payload — or a filtered one of 12 kB —
+		// can arrive FIRST, and then `getSource('route')` is undefined,
+		// `setData` throws inside the AJAX success handler, and the map stays
+		// empty for ever. Caught headless on the first run, where the style
+		// loads slowest; the in-app browser pane cannot composite Mapbox at all,
+		// so there it would have read as "the map is broken" with no cause.
+		//
+		// So: hold whatever arrives first and draw when BOTH are ready.
+		var CAP_PENDING_FEATURES = null;
+		var CAP_MAP_READY = false;
 
-		function idSearch() {
-			var name = $('#idSearch').val()
-			const rr = /^(.*?)\s*\(([-\w\d]{4,})\)$/g.exec(name)
-			url = `/p/${rr[2]}_${slug(rr[1])}`
-			//console.log(name, rr)
-			window.location.href = url
+		function capDrawWhenReady(features) {
+			if (features) CAP_PENDING_FEATURES = features;
+			if (!CAP_MAP_READY || CAP_PENDING_FEATURES === null) return;
+			var ff = CAP_PENDING_FEATURES;
+			CAP_PENDING_FEATURES = null;
+			projectsMapDrawFeatures(ff, true);
+			window.CAP_MAP_FEATURES = ff.length;
 		}
 
 		$(document).ready(function() {
 			projectsMapInit();
+			// `load` may already have fired by the time this binds; `loaded()`
+			// covers that, and mapbox no-ops a late `on('load')` handler.
+			if (typeof map !== 'undefined') {
+				if (map.loaded && map.loaded()) { CAP_MAP_READY = true; capDrawWhenReady(null); }
+				map.on('load', function () { CAP_MAP_READY = true; capDrawWhenReady(null); });
+			}
 			setTimeout(function(){
 					$('#cd-switch').click();
 				}, 2500);
-			showObjects('{!! $url !!}');
-			
+			drawCapitalMap();
+
+			// Boundary overlay control (.db-map-control) — open/close, aria sync,
+			// outside-click close. Lifted from /districts so both maps behave the
+			// same way; it replaces the old combined "Search & Layers" flyout.
+			var boundariesControl = document.getElementById('boundaries-control');
+			var boundariesToggle = document.getElementById('boundaries-toggle');
+			if (boundariesControl && boundariesToggle) {
+				boundariesToggle.addEventListener('click', function (e) {
+					e.stopPropagation();
+					var open = boundariesControl.classList.toggle('is-open');
+					boundariesToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+				});
+				document.addEventListener('click', function (e) {
+					if (!e.target.closest || !e.target.closest('#boundaries-control')) {
+						boundariesControl.classList.remove('is-open');
+						boundariesToggle.setAttribute('aria-expanded', 'false');
+					}
+				});
+			}
+
 			$('.dropdown-menu').click(function (e) {
 				e.stopPropagation();
 			});
@@ -355,318 +837,106 @@
 			});
 			autocomplete.clearPrefetchCache();
 			autocomplete.initialize(true);
-
 		})
 
 
-		function showObjects(url) {
+		/**
+		 * Draw the centroids for THIS page's filters.
+		 *
+		 * ⚠ Centroids, not footprints: the published outlines are ~20 MB citywide
+		 * and the largest single one is 618 kB. A project's real outline is
+		 * fetched one at a time on its own page.
+		 */
+		function drawCapitalMap() {
 			$('#mapLoadingOverlay').css('display', 'flex');
-			const cc = {'Other': '#53777a', 'Completed': '#f5ae33', 'Pending': '#bcbcbc', 'Pre-Design': '#ff7c7c', 'Close-out': '#f2c45a', 'Construction': '#36c726', 'Construction Procurement': '#beedb9', 'Design': '#78c0a8'}
-			console.log('Fetching URL:', url);
-			fapireq(url, function (jj) {
-				console.log('Data received:', jj);
-				var features = []
-				var tt = []
-				var aa = []
-				console.log('Starting loop');
-				
-				// Handle errors or missing data gracefully
-				if (jj.error || !jj.data || !Array.isArray(jj.data)) {
-					console.error('API Error or missing data:', jj.error || 'Invalid format');
-					$('#mapLoadingOverlay').hide();
-					return;
-				}
-
-				try {
-					jj.data.forEach(function (j) {
-						if (j['GEO_JSON']) {
-						try {
-							j['GEO_JSON'] = j['GEO_JSON'].replaceAll('""', '"')
-							geo_json = JSON.parse(j['GEO_JSON'])
-							if (!geo_json.properties) geo_json.properties = {};
-							geo_json.properties['CURRENT_PHASE'] = j['CURRENT_PHASE']
-							geo_json.properties['AGENCY'] = j['wegov-org-name']
-							geo_json.properties['AGENCY_ID'] = j['wegov-org-id']
-							geo_json.properties['AG_ID'] = j['wegov-org-id']
-							geo_json.properties['PRJ_TYPE'] = j['wegov-prjtype-name']
-							geo_json.properties['custom_color'] = (j['wegov-prj-color'] && cc[j['wegov-prj-color']]) || geo_json.properties['custom_color'] || '#53777a'
-							
-							// Add bounds
-							if (j['lat'] && j['lng']) {
-								geo_json.properties['W'] = parseFloat(j['lng'])
-								geo_json.properties['E'] = parseFloat(j['lng'])
-								geo_json.properties['N'] = parseFloat(j['lat'])
-								geo_json.properties['S'] = parseFloat(j['lat'])
-							}
-
-							// Ensure coordinates are numbers
-							if (geo_json.geometry && geo_json.geometry.coordinates) {
-								if (geo_json.geometry.type === 'Point') {
-									geo_json.geometry.coordinates = geo_json.geometry.coordinates.map(parseFloat);
-								} else if (geo_json.geometry.type === 'MultiPoint' || geo_json.geometry.type === 'LineString') {
-									geo_json.geometry.coordinates = geo_json.geometry.coordinates.map(c => c.map(parseFloat));
-								} else if (geo_json.geometry.type === 'Polygon' || geo_json.geometry.type === 'MultiLineString') {
-									geo_json.geometry.coordinates = geo_json.geometry.coordinates.map(r => r.map(c => c.map(parseFloat)));
-								} else if (geo_json.geometry.type === 'MultiPolygon') {
-									geo_json.geometry.coordinates = geo_json.geometry.coordinates.map(p => p.map(r => r.map(c => c.map(parseFloat))));
-								}
-							}
-
-							features = features.concat(gen_multi_geo(geo_json))
-						} catch (error) {
-							console.log('Errror', j['GEO_JSON']);
-							console.error('JSON Parse Error:', error);
+			$.ajax({
+				url: CAP_GEOJSON_URL,
+				dataType: 'json',
+				success: function (fc) {
+					var features = (fc && fc.features) ? fc.features : [];
+					features.forEach(function (ft) {
+						var c = ft.geometry && ft.geometry.coordinates;
+						if (!ft.properties) ft.properties = {};
+						// The shared draw helper reads W/S/E/N to fit the view; a
+						// centroid is its own bounding box.
+						if (c && c.length === 2) {
+							ft.properties.W = ft.properties.E = parseFloat(c[0]);
+							ft.properties.S = ft.properties.N = parseFloat(c[1]);
 						}
-						if (j['wegov-prjtype-name'] && typeof j['wegov-prjtype-name'] === 'string' && j['wegov-prjtype-name'].trim())
-							tt.push(j['wegov-prjtype-name'])
-						if (j['wegov-org-name'] && typeof j['wegov-org-name'] === 'string' && j['wegov-org-name'].trim())
-							aa.push(j['wegov-org-name'])
-					}
-					idSearchData.push(`${j['description']} (${j['projectid']})`)
-				})
-				console.log('Loop finished');
-				tt = [...new Set(tt)]
-				aa = [...new Set(aa)]
-				idSearchData = [...new Set(idSearchData)]
-				console.log('Loop finished');
+						ft.properties.custom_color = capPhaseColor(ft.properties.phase);
+					});
 
-				tt.sort().forEach(function (d, j) {
-					$('#typeflt_controls').append('<button class="dropdown-item" type="button">'+d+'</button>')
-				});
-				$('#typeflt_controls button').click(function () {fltClick('type', $(this));});
-				
-				aa.sort().forEach(function (d, j) {
-					$('#agcyflt_controls').append('<button class="dropdown-item" type="button">'+d+'</button>')
-				});
-				$('#agcyflt_controls button').click(function () {fltClick('agcy', $(this));});
-				console.log('Features count:', features.length);
-				if (features.length > 0) console.log('First feature:', features[0]);
-				projectsMapDrawFeatures(features, false);
+					// ⚠ The note is the SERVED sentence, printed as it came. It
+					// carries the denominator for the filters actually applied.
+					var cov = (fc && fc.coverage) ? fc.coverage : null;
+					$('#mapCoverageNote').text(cov && cov.note ? cov.note
+						: 'Location coverage is not available right now.');
+					$('#mapLegend').show();
 
-
-				// Name search autocomplete
-				var idSearch = new Bloodhound({
-				  datumTokenizer: Bloodhound.tokenizers.whitespace,
-				  queryTokenizer: Bloodhound.tokenizers.whitespace,
-				  local: idSearchData
-				});
-
-				$('#idSearch').typeahead(null, {
-				  name: 'idSearchAutocomplete',
-				  limit: 16,
-				  source: idSearch
-				});
-
-				idSearch.clearPrefetchCache();
-				idSearch.initialize(true);
-
-				} catch (processingError) {
-					console.error('Error processing projects data:', processingError);
-				} finally {
+					window.CAP_MAP_COVERAGE = cov;
+					capDrawWhenReady(features);
+				},
+				error: function () {
+					// ⚠ A FAILED REQUEST IS NOT AN EMPTY MAP. Saying nothing here
+					// would render zero pins and read as "no project has a location".
+					$('#mapCoverageNote').text('Project locations could not be loaded. This is a problem with this page, not a statement about the capital programme.');
+					window.CAP_MAP_FEATURES = null;
+				},
+				complete: function () {
 					$('#mapLoadingOverlay').hide();
+					window.CAP_MAP_DONE = true;
 				}
-
 			});
 		}
-
-		function fltClick(flttype, el) {
-			var flt = null
-			var set_active = null
-			if (el.hasClass('active')) {
-				flt = ['has', 'PRJ_TYPE']
-				set_active = false
-			} else if (flttype == 'type') {
-				flt = ['in', 'PRJ_TYPE', el.text()]
-				set_active = true
-			} else {
-				flt = ['in', 'AGENCY', el.text()]
-				set_active = true
-			}
-			// set bounds
-				var features = map.querySourceFeatures('route', {
-					sourceLayer: 'markers',
-					filter: flt
-				})
-				console.log(features)
-				features = getUniqueFeatures(features, 'PRJ_ID')
-				console.log(features)
-				const bounds = features.reduce((bounds, el) => {
-					bounds[0][0] = Math.min(bounds[0][0], el.properties.W - 0.01);
-					bounds[0][1] = Math.min(bounds[0][1], el.properties.S - 0.01);
-					bounds[1][0] = Math.max(bounds[1][0], el.properties.E + 0.01);
-					bounds[1][1] = Math.max(bounds[1][1], el.properties.N + 0.01);
-					return bounds;
-				}, [[360, 180], [-360, -180]]);
-			//
-			map.setFilter('markers', ['all', flt, ['==', '$type', 'Point']])
-			map.setFilter('streets', ['all', flt, ['==', '$type', 'LineString']])
-			map.setFilter('areas', ['all', flt, ['==', '$type', 'Polygon']])
-			$('#agcyflt_controls button, #typeflt_controls button').removeClass('active')
-			if (set_active)
-				el.addClass('active')
-			$('#agcyflt_toggle').dropdown('hide')
-			$('#typeflt_toggle').dropdown('hide')
-			map.fitBounds(bounds, {
-				padding: [50, 50],
-				maxZoom: 18,
-				duration: 1000,
-				animate: true,
-				essential: true,
-			});
-		}
-
-	
-		function gen_multi_geo(geo_json) {
-			var rr = []
-			const idx = {'MultiPoint': 'Point', 'MultiLineString': 'LineString', 'MultiPolygon': 'Polygon'}
-			
-			if (Object.keys(idx).includes(geo_json.geometry.type)) {
-				var newtype = idx[geo_json.geometry.type]
-				geo_json.geometry.coordinates.forEach((el)=>{
-					rr.push(Object.assign({}, geo_json, {geometry: {type: newtype, coordinates: el}}))
-				})
-			} else {
-				rr.push(geo_json)
-			}
-			return rr
-		}
-
-
-		function getUniqueFeatures(features, comparatorProperty) {
-			const uniqueIds = new Set();
-			const uniqueFeatures = [];
-			for (const feature of features) {
-				const id = feature.properties[comparatorProperty];
-				if (!uniqueIds.has(id)) {
-					uniqueIds.add(id);
-					uniqueFeatures.push(feature);
-				}
-			}
-			return uniqueFeatures;
-		}
-
 	</script>
 
 
+	{{-- ⚠⚠ THE WHOLE BLOCK IS GONE, MARKUP AND SCRIPT TOGETHER. It held a
+	     DataTable init over a JS mirror of `$datasets`, plus `loadTableStat()`,
+	     which fetched `/get/pstats-records_no/{table}` — a route that has never
+	     existed in this repo's history — and on the 404 ran `datasets.splice(i,1)`
+	     + `row(i).remove()`, so six failed lookups deleted six real rows and the
+	     table read "No data available in table". `<x-db.data-provenance>` renders
+	     those rows server-side, so there is nothing to hydrate and nothing that
+	     can splice a row away because a request failed. --}}
+	{{-- Actual Capital Spending by Fiscal Year — moved here with the tiles.
+	     ⚠ Chart.js is loaded PER PAGE (procurement does the same). `DBChart`
+	     comes from the layout and is global, but `Chart` is NOT — measured:
+	     `typeof Chart` was `undefined` on this page — and `DBChart.apply(Chart)`
+	     needs it, so the canvas would have stayed blank with no error.
+	     ⚠ The canvas must stay inside its fixed-height `.db-chart-body`: a
+	     `maintainAspectRatio:false` chart in an unsized box grows without bound
+	     (#61). --}}
+	@if(!empty($capitalSpend['values']))
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 	<script>
-				
-		var datatable = null
-		var dataurl = '{!! $url !!}'
-		var datasets = {!! json_encode(array_values($datasets)) !!}
-		var dsstats_table = null
-		
-		
-		$(document).ready(function() {
-			const globStats = {!! json_encode($globStats) !!};
-			globStatView(globStats);
-			
-			var tbl = $('#most_expensive_list_ tbody');
-		globStats['most_expensive_list'].forEach(function (row) {
-			$(`<tr><td style="white-space:nowrap; text-overflow:ellipsis; max-width:0; overflow:hidden; width:100%;"><a href="/p/${row['PROJECT_ID']}_${slug(row['PROJECT_DESCR'])}">${row['PROJECT_DESCR']}</a> </td><td>${toFinShortK(parseFloat(row['BUDG_CURR']), 1)}</td></tr>`).appendTo(tbl);
-		})
-		
-		tbl = $('#longest_running_list_ tbody');
-		globStats['longest_running_list'].forEach(function (row) {
-			$(`<tr><td style="white-space:nowrap; text-overflow:ellipsis; max-width:0; overflow:hidden; width:100%;"><a href="/p/${row['PROJECT_ID']}_${slug(row['PROJECT_DESCR'])}">${row['PROJECT_DESCR']}</a> </td><td style="white-space:nowrap;">${parseFloat(row['DURATION_CURR']).toFixed(1)} yrs</td></tr>`).appendTo(tbl);
-		})
-
-		tbl = $('#most_over_budget_list_ tbody');
-		globStats['most_over_budget_list'].forEach(function (row) {
-			$(`<tr><td style="white-space:nowrap; text-overflow:ellipsis; max-width:0; overflow:hidden; width:100%;"><a href="/p/${row['PROJECT_ID']}_${slug(row['PROJECT_DESCR'])}">${row['PROJECT_DESCR']}</a> </td><td style="white-space:nowrap;">${toFinShortK(parseFloat(row['BUDG_DIFF']), 1)} over</td></tr>`).appendTo(tbl);
-		})
-
-			tbl = $('#latest_list_ tbody');
-			globStats['latest_list'].forEach(function (row) {
-				$(`<tr><td style="white-space:nowrap; text-overflow:ellipsis; max-width:0; overflow:hidden; width:100%;"><a href="/p/${row['PROJECT_ID']}_${slug(row['PROJECT_DESCR'])}">${row['PROJECT_DESCR']}</a> </td><td style="white-space:nowrap;">${parseFloat(row['END_DIFF']).toFixed(1)} yrs late</td></tr>`).appendTo(tbl);
-			})
-
-			
-			dsstats_table = $('#dsStatsTable').DataTable({
-				data: datasets,
-				paging: false,
-				columns: [
-					{ title: "Name" },
-					{ title: "Section" },
-					{ title: "Description" },
-					{ title: "Last Updated" },
-					{ title: "Dataset Records" }
-				],
-				order: [],
-				dom: 'rtp',
-				initComplete: function () {
-					@foreach($datasets as $tbl=>$ds)
-						loadTableStat(
-							"{{ $tbl }}", 
-							"{!! str_replace('tblname', $tbl, $tblStatsUrl) !!}"
-						);
-					@endforeach
-				}
-			});
-			
-
-		});
-
-	
-		function drawProjects(pages) {	// 'all',     'current'
-			var mapIsActive = !$('#map_container').attr('style')
-			if (!mapIsActive) 
-				return;
-			
-			var api = $('#myTable').dataTable().api();
-			var modifier = {
-				order:  'current',  // 'current', 'applied', 'index',  'original'
-				page:   pages,      // 'all',     'current'
-				search: 'applied',     // 'none',    'applied', 'removed'
-			}
-			var features = [];
-			api.rows('', modifier).data().each(function (r, i) {
-				if (r['GEO_JSON'] != null) {
-					try {
-						r['GEO_JSON'] = r['GEO_JSON'].replaceAll('""', '"')
-						geo_json = null
-						geo_json = JSON.parse(r['GEO_JSON'])
-						geo_json.properties['AG_ID'] = r['wegov-org-id']
-						geo_json.properties['CURRENT_PHASE'] = r['CURRENT_PHASE']
-						features.push(geo_json)
-					} catch (error) {
-						console.log(r['GEO_JSON']);
-						console.log(geo_json);
-						console.error(error);
+		(function () {
+			if (typeof Chart === 'undefined' || typeof DBChart === 'undefined') return;
+			DBChart.apply(Chart);
+			var capEl = document.getElementById('capitalSpendChart');
+			if (!capEl) return;
+			var money = DBChart.money;
+			new Chart(capEl, {
+				type: 'bar',
+				data: {
+					labels: {!! json_encode($capitalSpend['labels'] ?? []) !!},
+					datasets: [{
+						label: 'Capital Spending',
+						data: {!! json_encode($capitalSpend['values'] ?? []) !!},
+						backgroundColor: DBChart.navy, borderRadius: 4
+					}]
+				},
+				options: {
+					responsive: true, maintainAspectRatio: false,
+					plugins: { legend: { display: false } },
+					scales: {
+						y: { beginAtZero: true, grid: { color: DBChart.grid }, ticks: { callback: money } },
+						x: { grid: { display: false } }
 					}
 				}
 			});
-			console.log(features.length)
-			projectsMapDrawFeatures(features);
-		}
-		
-		
-		function loadTableStat(dsName, url) {
-			dsstats_table = $('#dsStatsTable').DataTable();
-			fapireq(url, function (resp) {
-				if (resp['data'][0]['res']) {
-					$('#stats_'+dsName).text(resp['data'][0]['res'])
-					$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['res'])
-					$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
-				} else {
-					datasets.forEach(function (d, i) {
-						if (d[4].indexOf('stats_'+dsName) != -1) {
-							datasets.splice(i, 1)
-							dsstats_table.row(i).remove()
-							dsstats_table.draw();
-						}
-					})
-				}
-			})
-		}
-
-
-		function changeToggle (e) {
-			console.log($(e.target).next("label")[0].innerHTML)
-			$('#change_district').html($(e.target).next("label")[0].innerHTML);
-		}
-		$('#toggle_boundries').click( function (e) {
-			$(this).next('.dropdown-menu').toggleClass('show');
-		})
+		})();
 	</script>
+	@endif
 
 @endsection

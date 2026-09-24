@@ -21,29 +21,6 @@
 	<script>
 		var datasets = {!! json_encode(array_values($datasets)) !!}
 		var tblStatsUrls = {!! json_encode($tblStatsUrls) !!}
-		var dsstats_table = null
-
-
-		function loadTableStat(dsName, url) {
-			var dsstats_table = $('#dsStatsTable').DataTable();
-			fapireq(url, function (resp) {
-				if (resp['data'][0]['res']) {
-					$('#stats_'+dsName).text(resp['data'][0]['res'])
-					$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['res'])
-					$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
-				} else {
-					datasets.forEach(function (d, i) {
-						if (d[4].indexOf('stats_'+dsName) != -1) {
-							datasets.splice(i, 1)
-							dsstats_table.row(i).remove()
-							dsstats_table.draw();
-						}
-					})
-				}
-			})
-		}
-
-
 		function details(r) {
 			return '<table cellpadding="5" cellspacing="0" border="0" style="padding-left:50px;">'+
 			  @foreach ((array)$details['details'] as $h=>$f)
@@ -75,7 +52,12 @@
                     }
                 }],
 				deferRender: true,
-				language: { emptyTable: '<div class="db-empty"><div class="db-empty-icon"><i class="bi bi-inbox"></i></div><div class="db-empty-title">No data for this school</div><div class="db-empty-text">This dataset has no records for the selected school.</div></div>' },
+				{{-- ⚠ A section may override the empty state, because "we hold no
+				     records" and "this school cannot have these records" are
+				     different claims. An elementary school has no graduating
+				     cohort by definition; saying "no data" invites the reader to
+				     think something is missing. Default is unchanged. --}}
+				language: { emptyTable: {!! json_encode($details['emptyText'] ?? '<div class="db-empty"><div class="db-empty-icon"><i class="bi bi-inbox"></i></div><div class="db-empty-title">No data for this school</div><div class="db-empty-text">This dataset has no records for the selected school.</div></div>') !!} },
 				dom: '<"toolbar container-flex"<"row">>Blfrtip',
 				columns: [
                     @if ($details['detFlag'])
@@ -152,6 +134,18 @@
 							tt.sort().forEach(function (d, j) {
 								select.append('<option value="'+d+'">'+d+'</option>')
 							});
+
+							// ⚠ The DEFAULT VALUE half of `filters`. SchoolDatasets has
+							// documented `fld no => def value or null if empty` since it was
+							// written, and until 2026-09-21 only the KEYS were read — every
+							// declared default was silently inert. Applied only when a
+							// non-null value is declared, so every existing section (all of
+							// which declare null) behaves exactly as before.
+							var defs = {!! json_encode($details['fltDefaults']) !!};
+							if (defs[c] !== undefined && defs[c] !== null) {
+								select.val(defs[c]);
+								column.search(defs[c] ? defs[c] : '', false, false).draw();
+							}
 						});
 						setTimeout(function(){
 							initPopovers();
@@ -167,27 +161,6 @@
 			});
 
 
-			dsstats_table = $('#dsStatsTable').DataTable({
-				data: datasets,
-				paging: false,
-				columns: [
-					{ title: "Name" },
-					{ title: "Section" },
-					{ title: "Description" },
-					{ title: "Last Updated" },
-					{ title: "Dataset Records" }
-				],
-				order: [],
-				dom: 'rtp',
-				initComplete: function () {
-					@foreach($tblStatsUrls as $tbl=>$statsUrl)
-						loadTableStat(
-							"{{ $tbl }}", 
-							"{!! $statsUrl !!}"
-						);
-					@endforeach
-				}
-			});
 
 
 
@@ -334,13 +307,28 @@
 
 			
 			@if($schoolStatsUrl ?? null)
+				{{-- ⚠⚠ `schoolStatTiles` (script.js) OWNS THIS READ. Six unguarded
+				     `resp.data[0].<field>` reads used to live here — the same defect
+				     /schools and distsection already had, still live on this page.
+				     `fapireq` hands back three shapes and only one carries a row, and
+				     an empty `data` is reachable on a HEALTHY 200 as well: this
+				     endpoint returns `{rows: []}` for a location code it cannot
+				     resolve. Measured before the fix: HTTP 500 and 200-with-no-rows
+				     both threw `Cannot read properties of undefined (reading
+				     'povetry_perc')`, which aborts the rest of this ready handler.
+				     ⚠ The per-FIELD `!= null` guards were UNREACHABLE in exactly the
+				     cases they looked written for — the throw is on the ROW deref,
+				     before any of them evaluates. And their fallback was the literal
+				     string 'NaN', which reads as a bug to a visitor and cannot
+				     distinguish "we could not ask" from "it answered with nothing".
+				     ⚠ The tile lists are PASSED IN, not forked into a second copy:
+				     this page has no `schools_no` and does have `povetry_perc`. --}}
 				fapireq('{!! $schoolStatsUrl !!}', function (resp) {
-					$('#povetry_perc').text(resp.data[0].povetry_perc != null ? resp.data[0].povetry_perc : 'NaN')
-					$('#students_no').text(resp.data[0].students_no != null ? commaThousands(resp.data[0].students_no) : 'NaN')
-					$('#prj_no').text(resp.data[0].prj_no != null ? commaThousands(resp.data[0].prj_no) : 'NaN')
-					$('#prj_budget').text(resp.data[0].prj_budget != null ? toFinShortK(resp.data[0].prj_budget) : 'NaN')
-					$('#prj_costs').text(resp.data[0].prj_costs != null ? toFinShortK(resp.data[0].prj_costs) : 'NaN')
-					$('#pcosts_per_student').text(resp.data[0].pcosts_per_student != null ? toFinShortK(resp.data[0].pcosts_per_student) : 'NaN')
+					schoolStatTiles(resp, 'schoolStatsNote', {
+						plain: ['povetry_perc'],
+						count: ['students_no', 'prj_no'],
+						money: ['prj_budget', 'prj_costs', 'pcosts_per_student']
+					})
 				})
 			@endif	
 
@@ -402,23 +390,9 @@
 		
 		<div class="container">
 			<div class="row mb-4">
-				<div id="data_container_accordion" class="col-12 accordion">
-					<div class="accordion social_media" id="accordionThree">
-						<div>
-							<div id="headingThree">
-								<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-									We’re using normalized data from <span id="total_datasets"></span> datasets containing <span id="total_records"></span> records. Click here to learn more.
-								</button>
-							</div>
-							<div id="collapseThree" class="collapse hide" aria-labelledby="headingOne" data-parent="#accordionThree">
-								<div class="card-text table-responsive">
-									<table id="dsStatsTable" class="db-table display table-hover table-borderless" style="width:100%;">
-									</table>
-								</div>
-							</div>
-						</div>
-					</div>
-				</div>
+				{{-- One shell, from the shared provenance component. This markup was
+				     hand-rolled on fifteen views, each with its own per-page fetch. --}}
+				<x-db.data-provenance mode="page" :datasets="$datasets" id="schoolSectionDs" />
 			</div>
 		</div>
 	</div>

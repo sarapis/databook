@@ -42,6 +42,17 @@ services:
       - "8581:8000" # Direct API access for debugging
     environment:
       NORMALIZER_BASE_URL: https://normalize.databook.nyc
+      # ⚠ OFF locally. The base compose turns the scheduler ON, and on a dev box
+      # it re-ingests Socrata datasets over a hand-loaded seed — the raw CSV has
+      # none of the normalizer-stamped `wegov-*` columns, so a seeded table
+      # silently loses the columns every join depends on. Prod keeps it on.
+      DATA_SCHEDULER_ENABLED: "0"
+      # ⚠ main.py reads CORS_EXTRA_ORIGINS, but the api service has an explicit
+      # `environment:` block and no `env_file`, so a value in .env is only
+      # available for INTERPOLATION and never reaches the container. Passing it
+      # through here lets a headless browser run against the stack from another
+      # origin (e.g. host.docker.internal) without touching the app's config.
+      CORS_EXTRA_ORIGINS: "${CORS_EXTRA_ORIGINS:-}"
       # Prod runs least-privilege roles (databook_api owns the tables,
       # databook_mcp is read-only). Local dev uses the single `postgres` role.
       POSTGRES_USER: postgres

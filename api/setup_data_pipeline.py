@@ -347,6 +347,7 @@ UNTRACKED_TABLES = {
     # Socrata datasets with known IDs (active)
     "publishedwebsitedata": ("NYC Open Data Plan: Website Data", "socrata", "Reference"),
     "attendance":         ("School Attendance & Chronic Absenteeism", "socrata", "Schools"),
+    "graduationoutcomes": ("Graduation Results, Cohorts 2012-2019", "socrata", "Schools"),
     "ll18payanddemo":     ("LL18 Pay & Demographics",  "socrata",  "HR/Payroll"),
     "positionschedule":   ("Position Schedule",        "socrata",  "HR/Payroll"),
     "capitalstrategy":    ("Ten-Year Capital Strategy", "socrata",  "Budget/Finance"),
@@ -355,11 +356,49 @@ UNTRACKED_TABLES = {
     "capitalcommitmentactuals": ("Capital Commitment Actuals", "socrata", "Budget/Finance"),
     "cpdb_projects":      ("CPDB Projects (Raw)",      "socrata",  "Budget/Finance"),
     "cpdb_commitments":   ("CPDB Commitments (Raw)",   "socrata",  "Budget/Finance"),
+    # ── Capital sources added 2026-09-05 for the section rebuild ────────────
+    # Each is live and tri-annual/annual at source, so the scheduler's daily
+    # rowsUpdatedAt poll picks a new publication up within a day.
+    # ⚠ The two geometry sets are what let a capital project be mapped or
+    # placed in a district at all: CPDB's tabular projects carry NO geometry,
+    # and the retired series' LAT/LNG covers only what it covered in 2023.
+    "cpdb_geometry_points":   ("CPDB Projects (Points)",   "socrata", "Budget/Finance"),
+    "cpdb_geometry_polygons": ("CPDB Projects (Polygons)", "socrata", "Budget/Finance"),
+    # ⚠ Rates EVERY capital project for climate alignment and joins CPDB on
+    # 9,119 of 9,134 ids — 1.6x as many projects as have any published
+    # schedule. Did not exist under the retired regime (first published
+    # 2024-04-24, five months after it stopped).
+    "climatebudgeting":   ("Climate Budgeting: Capital Climate Investments", "socrata", "Budget/Finance"),
+    # The only capital dataset carrying a council district or a named sponsor.
+    # FY2019-FY2026; its Budget_Line matches CPDB commitments on 444 of 480
+    # after normalisation (see modules/budgetline.py).
+    #
+    # ⚠⚠ `Council_District` IS ONLY USABLE ON 90% OF ROWS. Measured 2026-09-05:
+    # 10,364 of 11,503 carry a valid district and there are exactly 51 distinct
+    # values — but 1,106 rows (9.6%) hold something else entirely, ranging to
+    # 394,046,488,992, and 723 of those have a comma in `Sponsor`. They are
+    # jointly-sponsored awards whose field carries money, not a district. 33 are
+    # empty.
+    # ⚠ THIS IS NYC'S DATA, NOT OUR INGEST — Python's own csv module parses the
+    # published file to the identical 10,364 / 1,106 / 33 split, so there is
+    # nothing to fix on our side. Anything placing awards on a map or a district
+    # page must filter to 1-51 and DISCLOSE the 1,106 it cannot place, never
+    # drop them silently.
+    "councilcapitalbudget": ("City Council Capital Budget", "socrata", "Budget/Finance"),
+    "capitalfundingsource": ("Capital Plan Funding Source", "socrata", "Budget/Finance"),
+    "capitalcashflow":    ("Financial Plan Statements - Capital Cashflow", "socrata", "Budget/Finance"),
+    "sogrneeds":          ("State of Good Repair Needs", "socrata", "Budget/Finance"),
+    # ⚠⚠ EXTRACTOR, NOT SOCRATA, AND DELIBERATELY SO. `4hcv-tc5r` is the Socrata
+    # mirror of this feed and served **0 rows** when measured 2026-09-03 while
+    # advertising a same-day refresh; the Parks-hosted JSON had 2,244 records at
+    # the same moment. Registering the Socrata id would have silently served an
+    # empty table. The loader reads the feed and records which source answered.
+    "parkscapitaltracker": ("NYC Parks Capital Project Tracker", "extractor", "Budget/Finance"),
     # External / one-time downloads
     "schoolcampus":       ("School Campus Data",       "extractor", "Schools"),
     "auctions":           ("City Auctions",            "external",  "Procurement"),
-    # Dated/retired datasets (will be deactivated below)
     "capitalbudget":      ("Capital Budget",           "socrata",  "Budget/Finance"),
+    # Dated/retired datasets (will be deactivated below)
     "capitalprojectsdollarscomp": ("Capital Projects Dollars Comparison", "socrata", "Budget/Finance"),
     "capitalprojectsdollars": ("Capital Project Detail Data - Dollars", "socrata", "Budget/Finance"),
     "capitalprojectsmilestones": ("Capital Projects Milestones", "socrata", "Budget/Finance"),
@@ -382,6 +421,24 @@ METADATA_CORRECTIONS = {
         "source_url": "https://data.cityofnewyork.us/api/views/423i-ukqr/rows.csv?accessType=DOWNLOAD"},
     "attendance":           {"socrata_id": "gqq2-hgxd",
         "source_url": "https://data.cityofnewyork.us/api/views/gqq2-hgxd/rows.csv?accessType=DOWNLOAD"},
+    "graduationoutcomes":   {"socrata_id": "mjm3-8dw8",
+        "source_url": "https://data.cityofnewyork.us/api/views/mjm3-8dw8/rows.csv?accessType=DOWNLOAD"},
+    "cpdb_geometry_points":   {"socrata_id": "h2ic-zdws",
+        "source_url": "https://data.cityofnewyork.us/api/views/h2ic-zdws/rows.csv?accessType=DOWNLOAD"},
+    "cpdb_geometry_polygons": {"socrata_id": "9jkp-n57r",
+        "source_url": "https://data.cityofnewyork.us/api/views/9jkp-n57r/rows.csv?accessType=DOWNLOAD"},
+    "climatebudgeting":     {"socrata_id": "c99a-c5ux",
+        "source_url": "https://data.cityofnewyork.us/api/views/c99a-c5ux/rows.csv?accessType=DOWNLOAD"},
+    "councilcapitalbudget": {"socrata_id": "t474-a92g",
+        "source_url": "https://data.cityofnewyork.us/api/views/t474-a92g/rows.csv?accessType=DOWNLOAD"},
+    "capitalfundingsource": {"socrata_id": "4utb-pisg",
+        "source_url": "https://data.cityofnewyork.us/api/views/4utb-pisg/rows.csv?accessType=DOWNLOAD"},
+    "capitalcashflow":      {"socrata_id": "4xfc-mzbg",
+        "source_url": "https://data.cityofnewyork.us/api/views/4xfc-mzbg/rows.csv?accessType=DOWNLOAD"},
+    "parkscapitaltracker":  {"socrata_id": None,
+        "source_url": "https://www.nycgovparks.org/bigapps/DPR_CapitalProjectTracker_001.json"},
+    "sogrneeds":            {"socrata_id": "vck7-ujai",
+        "source_url": "https://data.cityofnewyork.us/api/views/vck7-ujai/rows.csv?accessType=DOWNLOAD"},
     "capitalstrategy":      {"socrata_id": "b37a-3faw",
         "source_url": "https://data.cityofnewyork.us/api/views/b37a-3faw/rows.csv?accessType=DOWNLOAD"},
     "capitalprojectslist":  {"socrata_id": "fi59-268w",
@@ -446,7 +503,12 @@ DUPLICATE_DATASETS = [
 
 # Datasets that are dated/static and should not be checked for updates
 DATED_DATASETS = [
-    "capitalbudget",
+    # ⚠⚠ `capitalbudget` was REMOVED from this list 2026-09-05. It is not dated:
+    # NYC still publishes it (46m8-77gv, rowsUpdatedAt 2026-07-13 = the Adopted
+    # FY2027 budget), and sitting here left it `is_active=false` with
+    # last_ingested_at NULL — never once ingested — while the table held a
+    # publication from 2026-05-12. The Budget Lines page has therefore been one
+    # publication behind for months, silently.
     "capitalprojectsdollarscomp",
     "capitalprojectsdollars",      # Retired by NYC Oct 2023 (wa2y-rh4b)
     "capitalprojectsmilestones",   # Retired by NYC Oct 2023 (s7yh-frbm)
@@ -546,6 +608,91 @@ async def apply_registry_deactivations(conn):
         WHERE table_name = ANY($1::text[])
     """, DATED_DATASETS)
     print(f"  Deactivated {len(DATED_DATASETS)} dated/static datasets")
+
+
+# Datasets the capital-section rebuild adds. ⚠ SCOPED DELIBERATELY: this list is
+# registered by a function main() actually calls, unlike UNTRACKED_TABLES.
+CAPITAL_DATASETS = [
+    "cpdb_geometry_points", "cpdb_geometry_polygons", "climatebudgeting",
+    "councilcapitalbudget", "capitalfundingsource", "capitalcashflow",
+    "sogrneeds", "parkscapitaltracker",
+]
+
+# The graduation-outcomes ingest (docs/GRADUATION-INGEST-PLAN.md). Same reason
+# as CAPITAL_DATASETS for living here rather than in UNTRACKED_TABLES alone:
+# that dict is only read by register_untracked_tables(), which main() never
+# calls, so declaring a dataset there and nowhere else registers NOTHING.
+GRADUATION_DATASETS = ["graduationoutcomes"]
+
+# ⚠ ONE list is what the registration loop walks. Adding a dataset means adding
+# it to a named list above AND to this one — a list declared but not unioned
+# here registers nothing, which is the same failure UNTRACKED_TABLES already has.
+EXPLICIT_DATASETS = CAPITAL_DATASETS + GRADUATION_DATASETS
+
+# Datasets wrongly parked in DATED_DATASETS that must be switched back ON.
+# ⚠ Removing a name from that list is NOT enough — deactivation already wrote
+# `is_active = false` to the row, and nothing flips it back.
+REACTIVATE_DATASETS = ["capitalbudget"]
+
+
+async def register_explicit_datasets(conn):
+    """Register the explicitly-named datasets, and reactivate `capitalbudget`.
+
+    ⚠ Renamed from `register_capital_datasets` when the graduation ingest became
+    its second caller-set (docs/GRADUATION-INGEST-PLAN.md). It walks
+    `EXPLICIT_DATASETS`, so a new named list must be unioned into that or it is
+    declared and never read — the failure this whole function exists to avoid.
+
+    ⚠⚠ WHY THIS EXISTS RATHER THAN JUST ADDING TO `UNTRACKED_TABLES`.
+    `register_untracked_tables()` is UNREACHABLE in production — it is called
+    only from `populate_from_datasets_json`, which returns early unless a
+    `datasets.json` exists at a dev path that is not on the box. Adding rows
+    there registers nothing, which is exactly what happened on the first attempt
+    here: the seed reported success and created none of the seven.
+
+    ⚠ And promoting that whole function is NOT safe — measured previously, it
+    would flip `needs_normalization` on 27 prod rows and register four unrelated
+    fire datasets. So this registers a NAMED set instead, reading the same
+    `UNTRACKED_TABLES` / `METADATA_CORRECTIONS` declarations so there is still
+    one place to describe a dataset.
+
+    ⚠⚠ `capitalbudget` NEEDS AN EXPLICIT REACTIVATION. It sat in
+    `DATED_DATASETS` while NYC has gone on publishing it (46m8-77gv,
+    rowsUpdatedAt 2026-07-13 = the Adopted FY2027 budget), so it was
+    `is_active = false` with `last_ingested_at` NULL — never once ingested —
+    while its table held a publication from 2026-05-12. Deleting it from the
+    list only stops it being re-deactivated; the stored flag stays false.
+    """
+    registered = 0
+    for table_name in EXPLICIT_DATASETS:
+        meta = UNTRACKED_TABLES.get(table_name)
+        if not meta:
+            print(f"  ✗ {table_name}: not declared in UNTRACKED_TABLES")
+            continue
+        display_name, source_type, category = meta
+        corrections = METADATA_CORRECTIONS.get(table_name, {})
+        await conn.execute("""
+            INSERT INTO dataset_registry (
+                table_name, display_name, source_type, category,
+                socrata_id, source_url, ingestion_mode, is_active
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'replace', TRUE)
+            ON CONFLICT (table_name) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                source_type  = EXCLUDED.source_type,
+                category     = EXCLUDED.category,
+                socrata_id   = EXCLUDED.socrata_id,
+                source_url   = EXCLUDED.source_url,
+                is_active    = TRUE
+        """, table_name, display_name, source_type, category,
+             corrections.get('socrata_id'), corrections.get('source_url'))
+        registered += 1
+    print(f"  Registered {registered} explicitly-named datasets")
+
+    for table_name in REACTIVATE_DATASETS:
+        res = await conn.execute("""
+            UPDATE dataset_registry SET is_active = TRUE WHERE table_name = $1
+        """, table_name)
+        print(f"  Reactivated {table_name} ({res})")
 
 
 async def register_untracked_tables(conn):
@@ -786,6 +933,7 @@ async def main():
         # dead code there. Idempotent, DB-only, no external dependencies.
         print("\nApplying registry deactivations...")
         await apply_registry_deactivations(conn)
+        await register_explicit_datasets(conn)
 
         if args.sync_stats or args.populate:
             await sync_table_stats(conn)

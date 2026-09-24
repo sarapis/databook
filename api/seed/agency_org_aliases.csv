@@ -1,0 +1,42 @@
+# Curated map: a contracts.agency STRING -> the wegov_orgs id it names.
+#
+# WHY THIS EXISTS. `oce.py::_resolve_org_id` matches contracts.agency against
+# wegov_orgs.name / alternate_name by EXACT upper/trim equality. Measured
+# 2026-09-01, 11 of 46 distinct agency strings match nothing -- 3,838 contracts
+# worth $23,171.9M -- so those agencies' contracts were unreachable from their
+# org profile, and a query by an agency's CURRENT name returned a reassuring
+# zero rather than a lookup failure.
+#
+# FOUR FAILURE MODES, all present below:
+#   1 legacy name kept after a rename        DoITT -> OTI, OEM -> NYCEM
+#   2 orthographic variant of the CURRENT name  "DEPT." for DEPARTMENT, "&" for AND
+#   3 a malformed string                     "DCASDIVISION" is missing a space
+#   4 a parenthesised City budget code       "OFFICE OF CRIMINAL JUSTICE (128)"
+#
+# ⚠⚠ CURATED, NEVER FUZZY, AND THE MEASUREMENT IS WHY. Nearest-neighbour trigram
+# similarity gets the two LARGEST strings WRONG: the $7.4B DoITT string's nearest
+# live org is "Department of Records and Information Services" (0.44) and the
+# $8.0B DCAS one's is "Municipal Division of Transitional Services" (0.52) --
+# both different agencies. A threshold set anywhere useful would confidently
+# misfile $15.4B. This is the #148 / DOS-crosswalk rule: an ambiguous name stays
+# unlinked rather than pointing at an arbitrary entity.
+#
+# ⚠ `aka` is a ;-separated list of OTHER names a person might search by (current
+# name, acronym, legacy acronym). It is what makes searching "OTI" or "DOITT"
+# find the contracts filed under the legacy department name. Exact match only --
+# a substring match on a 3-letter acronym is not a measurement.
+#
+# ⚠ DO NOT rewrite the source strings in `contracts`. They are the upstream
+# PASSPort values and parity may depend on them; this file is the mapping layer.
+agency,wegov_org_id,org_name,aka,why
+"DCASDIVISION OF MUNICIPAL SUPPLY SERVICE",170010856,"Department of Citywide Administrative Services","DCAS;Citywide Administrative Services","Mode 3: a missing space after DCAS. This is DCAS's Division of Municipal Supply Services. Largest unresolved string at $8023.6M over 1026 contracts."
+"DEPARTMENT OF INFORMATION TECHNOLOGY AND TELECOMMUNICATIONS",170010858,"Office of Technology and Innovation","OTI;DOITT;Technology and Innovation","Mode 1: DoITT was renamed OTI in 2022. $7393.3M over 1015 contracts. ⚠ Contracts are STILL being filed under the legacy name -- the SHI Citywide IT Purchasing Contract starts 07/01/2026, four years after the rename -- so this is not only a historical-records mapping."
+"OFFICE OF CRIMINAL JUSTICE (128)",170011021,"Office of Criminal Justice","MOCJ;Mayor's Office of Criminal Justice","Mode 4: the parenthesised number is a City budget agency code, not part of the name. Same office as the (002) row below; both name the Office of Criminal Justice."
+"NEW YORK CITY POLICE DEPARTMENT",170010056,"Police Department","NYPD","Mode 2: the register stores the short form 'Police Department'. Same entity."
+"OFFICE OF CRIMINAL JUSTICE (002)",170011021,"Office of Criminal Justice","MOCJ;Mayor's Office of Criminal Justice","Mode 4, second code. 002 is the Mayoralty budget unit MOCJ has historically been funded through; 128 is its own. The AGENCY named is the same in both, which is the grain this map resolves."
+"MAYORALTY",170010002,"Mayor's Office","OOM;Office of the Mayor","Mode 2: 'Mayoralty' is the City budget name for the Mayor's Office (agency code 002). ⚠ The weakest row here -- trigram similarity finds nothing (0.26, nearest was 'First Deputy Mayor'), so this rests on the budget-name convention rather than on string evidence. Re-check if the Mayor's Office is ever split in the register."
+"OFFICE OF EMERGENCY MANAGEMENT",170010017,"Department of Emergency Management","NYCEM;OEM;New York City Emergency Management","Mode 1: OEM became NYC Emergency Management in 2019. The register's display_name is already 'New York City Emergency Management'."
+"NYC TAXI AND LIMOUSINE COMMISSION",170010156,"Taxi & Limousine Commission","TLC","Mode 2: an 'NYC' prefix and 'AND' where the register has '&'."
+"DEPT. OF CONSUMER & WORKER PROTECTION",170010866,"Department of Consumer and Worker Protection","DCWP;DCA;Consumer and Worker Protection","Mode 2, and the one that proves normalisation alone is not enough: NOT renamed-and-stale, just 'DEPT.' for DEPARTMENT and '&' for AND. A substring query on the correct current canonical name returns zero."
+"OFFICE OF CONTRACT SERVICES",170011020,"Mayor's Office of Contract Services","MOCS","Mode 2: the register carries the 'Mayor's' prefix."
+"OFFICE OF THE CHIEF MEDICAL EXAMINER",170011026,"Office of Chief Medical Examiner","OCME","Mode 2: a definite article the register omits."

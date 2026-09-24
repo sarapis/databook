@@ -62,6 +62,9 @@
 						<div class="db-stat"><div class="db-stat-label">Project Costs</div><div id="prj_costs" class="db-stat-value prj_stat">&nbsp;</div></div>
 						<div class="db-stat"><div class="db-stat-label">Cost per Student</div><div id="pcosts_per_student" class="db-stat-value prj_stat">&nbsp;</div></div>
 					</div>
+					{{-- ⚠ A FAILED STATS REQUEST IS NOT AN EMPTY DISTRICT. Written by
+					     `schoolStatTiles`; hidden while the figures are fine. --}}
+					<p id="schoolStatsNote" class="text-muted small mb-0" style="display:none;"></p>
 				</div>
 			@endif
 		</div>
@@ -72,28 +75,6 @@
 
 <script>
 		var datasets = {!! json_encode(array_values($datasets)) !!}
-		var dsstats_table = null
-
-		function loadTableStat(dsName, url) {
-			var dsstats_table = $('#dsStatsTable').DataTable();
-			fapireq(url, function (resp) {
-				if (resp['data'][0]['res']) {
-					$('#stats_'+dsName).text(resp['data'][0]['res'])
-					$('#total_records').text(Number($('#total_records').text()) + resp['data'][0]['res'])
-					$('#total_datasets').text(Number($('#total_datasets').text()) + 1)
-				} else {
-					datasets.forEach(function (d, i) {
-						if (d[4].indexOf('stats_'+dsName) != -1) {
-							datasets.splice(i, 1)
-							dsstats_table.row(i).remove()
-							dsstats_table.draw();
-						}
-					})
-				}
-			})
-		}
-
-
 		function details(d) {
 			return '<table cellpadding="5" cellspacing="0" border="0" style="padding-left:50px;">'+
 			  @foreach ((array)$details['details'] as $h=>$f)
@@ -178,6 +159,16 @@
 							tt.sort().forEach(function (d, j) {
 								select.append('<option value="'+d+'">'+d+'</option>')
 							});
+
+							// ⚠ The DEFAULT VALUE half of `filters`, mirroring
+							// schoolSection.blade.php. Applied only when a non-null value
+							// is declared, so every pre-existing district section (all of
+							// which declare null) behaves exactly as before.
+							var defs = {!! json_encode($details['fltDefaults'] ?? (object)[]) !!};
+							if (defs[c] !== undefined && defs[c] !== null) {
+								select.val(defs[c]);
+								column.search(defs[c] ? defs[c] : '', false, false).draw();
+							}
 						});
 
 						@foreach ($details['filters'] as $i=>$v)
@@ -233,39 +224,15 @@
 
 
 			@if($sdStatsUrl ?? null)
+				{{-- ⚠ Guarded by `schoolStatTiles` (script.js): this block was the
+				     same unguarded `resp.data[0]` read that threw on /schools. --}}
 				fapireq('{!! $sdStatsUrl !!}', function (resp) {
-					$('#schools_no').text(commaThousands(resp.data[0].schools_no))
-					$('#students_no').text(commaThousands(resp.data[0].students_no))
-					$('#prj_no').text(commaThousands(resp.data[0].prj_no))
-					$('#prj_budget').text(toFinShortK(resp.data[0].prj_budget))
-					$('#prj_costs').text(toFinShortK(resp.data[0].prj_costs))
-					$('#pcosts_per_student').text(toFinShortK(resp.data[0].pcosts_per_student))
+					schoolStatTiles(resp, 'schoolStatsNote')
 				})
 			@endif
 
 
 
-			dsstats_table = $('#dsStatsTable').DataTable({
-				data: datasets,
-				paging: false,
-				columns: [
-					{ title: "Name" },
-					{ title: "Section" },
-					{ title: "Description" },
-					{ title: "Last Updated" },
-					{ title: "Dataset Records" }
-				],
-				order: [],
-				dom: 'rtp',
-				initComplete: function () {
-					@foreach($datasets as $tbl=>$ds)
-						loadTableStat(
-							"{{ $tbl }}",
-							"{!! str_replace('tblname', $tbl, $tblStatsUrl) !!}"
-						);
-					@endforeach
-				}
-			});
 
 		});
 </script>
@@ -308,23 +275,9 @@
 
 	<div class="container">
 		<div class="row mb-4">
-			<div id="data_container_accordion" class="col-12 accordion">
-				<div class="accordion social_media" id="accordionThree">
-					<div>
-						<div id="headingThree">
-							<button class="social_btn" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
-								We’re using normalized data from <span id="total_datasets"></span> datasets containing <span id="total_records"></span> records. Click here to learn more.
-							</button>
-						</div>
-						<div id="collapseThree" class="collapse hide" aria-labelledby="headingOne" data-parent="#accordionThree">
-							<div class="card-text table-responsive">
-								<table id="dsStatsTable" class="db-table display table-hover table-borderless" style="width:100%;">
-								</table>
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
+			{{-- One shell, from the shared provenance component. This markup was
+			     hand-rolled on fifteen views, each with its own per-page fetch. --}}
+			<x-db.data-provenance mode="page" :datasets="$datasets" id="distsectionDs" />
 		</div>
 	</div>
 

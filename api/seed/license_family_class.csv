@@ -80,9 +80,15 @@
 # (25.2%) and concluded "only a quarter of license spend is an open-source-
 # substitution question". That table REQUIRED this family to be support-maintenance.
 # Measured three ways (Postgres, the /oce/licenses payload, the rendered page): it is
-# `software-licence`, and the real rollup is software-licence $984.7M (71.9%) /
-# managed-hosting $265.5M (19.4%) / support-maintenance $43.3M (3.2%). Roughly three
-# quarters, not a quarter.
+# `software-licence`, and the rollup THAT DAY was software-licence $984.7M (71.9%) /
+# managed-hosting $265.5M (19.4%) / support-maintenance $43.3M (3.2%) -- over the 431
+# families the inventory then held. The point that survives is the CLASS of this
+# family, not the shares.
+# ⚠ Re-measured 2026-09-16 after #239 nearly doubled the inventory (431 -> 814
+# families): software-licence $1,035.3M (58.5%) / managed-hosting $466.3M (26.3%) /
+# support-maintenance $119.0M (6.7%). So it is roughly three FIFTHS now, not three
+# quarters -- the sentence that corrected the original error became one in its turn.
+# Do not re-cite a share from here; CLAUDE.md carries the dated table.
 # ⚠ `capability` is deliberately BLANK: the loader reads blank as "leave the AI's
 # value alone" (currently office-productivity), so pinning the CLASS does not quietly
 # move this family in the cross-agency function view. Re-tagging the function of an

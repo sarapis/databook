@@ -1,0 +1,106 @@
+# Daily audit of the public MCP server: call all 40 tools against prod and fail
+# on any exception.
+#
+# ⚠⚠ WHY THIS IS ITS OWN SCHEDULED WORKFLOW. This job already existed, in
+# ci.yml, gated `if: github.event_name == 'workflow_dispatch'` — so it printed
+# "skipping" on every PR and had never run on its own. On 2026-08-18 the MCP
+# server was 502 for 16.5 HOURS / 961 restarts (an unpinned `pip install mcp`
+# took 2.0.0, which removed `mcp.server.fastmcp`) and was found by running
+# `docker ps` for an unrelated reason. This is the check written to catch exactly
+# that, and it was switched off. A job you always see skipping is not coverage.
+#
+# ⚠ Two compounding reasons nothing else noticed, both still true: `restart:
+# unless-stopped` makes a crash loop present as "Restarting" rather than
+# "Exited", so container state reads as liveness; and prod-smoke checks the api
+# and the frontend, not /mcp.
+#
+# It lives here rather than in ci.yml because a `schedule:` on ci.yml would drag
+# the unit tests and the ephemeral-stack smoke along on every cron, and because
+# the repo already keeps its scheduled checks in their own files
+# (public-sync-check.yml, token-parity-check.yml). The job was REMOVED from
+# ci.yml in the same change — one definition, so a fix to the audit cannot land
+# in a copy nobody runs.
+#
+# Read-only: every tool is a query. 40 calls a day is nothing for prod.
+name: MCP Tool Audit
+
+on:
+  schedule:
+    - cron: '0 9 * * *'   # daily, 09:00 UTC — clear of the 04:00 api restart
+                          # and of every host cron in root's crontab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  mcp-tool-audit:
+    name: MCP Tool Audit (prod)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Call every MCP tool and fail on any exception
+        id: audit
+        run: |
+          set -o pipefail
+          MCP_URL=https://api.databook.nyc/mcp \
+            python3 scripts/mcp-tool-audit.py 2>&1 | tee audit.log
+
+      # ⚠ `if: failure()` so the report only fires on a real failure, and the job
+      # still ends red — the issue is the durable artifact, the red run is the
+      # notification. A green run writes nothing, deliberately: this repo's
+      # standing lesson is that a push nobody reads is worse than a signal on the
+      # page, and an issue opened every morning would be trained away in a week.
+      - name: Report the failure as an issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try { log = fs.readFileSync('audit.log', 'utf8'); } catch (e) { log = '(no audit.log — the step failed before writing one)'; }
+            const tail = log.split('\n').slice(-60).join('\n');
+            const title = 'MCP tool audit is failing against prod';
+            const body = [
+              `The daily MCP tool audit failed on \`${context.sha.slice(0, 7)}\`.`,
+              '',
+              '`scripts/mcp-tool-audit.py` calls every tool on `https://api.databook.nyc/mcp`',
+              'and fails on any exception, an empty/truncated tool list, or a failed handshake.',
+              'A failure here means the **public** MCP server is degraded — check',
+              '`docker ps` for `databook-mcp` and read `RestartCount`, because a crash loop',
+              'presents as "Restarting", never "Exited".',
+              '',
+              `[Failing run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              '',
+              '<details><summary>Last 60 lines</summary>',
+              '',
+              '```',
+              tail,
+              '```',
+              '',
+              '</details>',
+              '',
+              '_Opened automatically by `.github/workflows/mcp-tool-audit.yml`._',
+            ].join('\n');
+
+            // Reuse one issue rather than opening a new one every day a break persists.
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'mcp-audit',
+            });
+            if (open.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['mcp-audit'],
+              });
+            }

@@ -108,6 +108,21 @@ def sql_is_master(col: str) -> str:
     ⚠ Must stay equivalent to `is_master`. A guard test asserts both agree on the
     full measured vocabulary — a Python rule and a SQL rule that drift are two
     owners wearing one name, which is the defect this module exists to end.
+
+    ⚠⚠ THE `coalesce(..., false)` IS LOAD-BEARING, AND ITS ABSENCE SILENTLY LOST
+    MONEY. `substring('20226000061' from '^[A-Za-z]+')` is NULL — an all-numeric
+    contract id has no leading alpha run — and `NULL IN ('MA','MMA')` is **NULL,
+    not false**. In a three-way split that is fatal in a way no count reveals:
+    `FILTER (WHERE NOT (<null>))` and `FILTER (WHERE <null>)` BOTH exclude the
+    row, so it falls out of the committed aggregates AND the ceiling aggregate
+    while `COUNT(*)` still counts it. Measured on prod 2026-08-22: exactly 2 tech
+    contracts (`20226000061`, `20226000060`) carrying **$2,500,000** vanished
+    from the Overview's by-year value series while its contract count closed
+    perfectly — which is why the reconciliation passed and only comparing against
+    an exact `::numeric` total found it.
+    ⚠ And it made the two rules DISAGREE: `is_master('20226000061')` is False in
+    Python where the SQL was NULL. The guard that claims they agree never tested
+    an id without a leading alpha run; it does now.
     """
     kinds = ", ".join(f"'{k}'" for k in sorted(MASTER_KINDS))
-    return f"substring({col} from '^[A-Za-z]+') IN ({kinds})"
+    return f"coalesce(substring({col} from '^[A-Za-z]+') IN ({kinds}), false)"

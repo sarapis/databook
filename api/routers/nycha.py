@@ -25,6 +25,9 @@ import duckdb
 from fastapi import APIRouter, HTTPException, Response
 
 from modules.duckpool import to_duckdb_thread
+# ⚠ str() on the commonest exceptions (TimeoutError, KeyError, bare Exception) is
+# the EMPTY STRING, so a bare {e} logs a line with no message. See modules/errfmt.
+from modules.errfmt import exc_str
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/oce/nycha", tags=["nycha"])
@@ -84,10 +87,49 @@ def _available(domain: str) -> bool:
 
 
 def _cached(key: str, fn):
+    """SYNC cache wrapper — for callers that are ALREADY running inside the DuckDB
+    pool (e.g. `vendor_activity_for_names`, `_query_vendors_all`, both invoked via
+    `to_duckdb_thread`). Offloading again from there would deadlock-by-queueing on
+    the same bounded executor, so this one deliberately calls `fn()` inline.
+
+    ⚠ NEVER call this from an `async def`. Use `_cached_async`.
+    """
     hit = _CACHE.get(key)
     if hit and (time.time() - hit["ts"]) < _CACHE_TTL:
         return hit["data"]
     data = fn()
+    _CACHE[key] = {"data": data, "ts": time.time()}
+    return data
+
+
+async def _cached_async(key: str, fn):
+    """ASYNC cache wrapper; a MISS is offloaded to the dedicated DuckDB executor.
+
+    ⚠⚠ THE DEFECT THIS FIXES, measured on prod 2026-08-26. Fifteen of this file's
+    nineteen endpoints called the SYNC `_cached` straight from an `async def`, so a
+    1.76-3.82s Parquet scan over the 21.9M-row NYCHA lake ran **ON THE EVENT LOOP
+    THREAD** and stalled every other request in the process for its duration.
+
+    That is what produced 24636cad's residual starvation, and the signature is
+    unmistakable once you look for it:
+
+        control (Postgres-only probe)   mean 0.027s   max 0.046s
+        during ONE NYCHA search        mean 0.108s   max 0.976s   (3.7x / 21x)
+        recovered                      mean 0.029s   max 0.046s
+        1 / 2 / 4 concurrent searches  1.9s / 4.2s / 7.7s wall  -> EXACTLY 4x
+        api container CPU during a scan: 99.55% = ONE core of eight
+
+    Perfect linear serialization at one core is not a connection lock and not CPU
+    saturation — it is every scan queueing on the single event-loop thread.
+
+    ⚠ `routers/budget_revenue.py` ALREADY FIXED THIS for its own endpoints, with a
+    docstring describing the same stall; nycha.py simply never got the same
+    treatment. Two files, one lesson, applied once.
+    """
+    hit = _CACHE.get(key)
+    if hit and (time.time() - hit["ts"]) < _CACHE_TTL:
+        return hit["data"]
+    data = await to_duckdb_thread(fn)
     _CACHE[key] = {"data": data, "ts": time.time()}
     return data
 
@@ -202,7 +244,7 @@ async def nycha_budget_summary():
     if not _available("nycha_budget"):
         return _BUDGET_EMPTY
     try:
-        return _cached("nycha:budget:summary", _query_budget_summary)
+        return await _cached_async("nycha:budget:summary", _query_budget_summary)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA budget summary failed: {exc}")
 
@@ -215,7 +257,7 @@ async def nycha_budget_units(fiscal_year: Optional[int] = None, sort: str = "bas
     limit = max(1, min(limit, 200))
     key = f"nycha:budget:units:{fiscal_year}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _query_budget_units(fiscal_year, sort, order, page, limit))
+        return await _cached_async(key, lambda: _query_budget_units(fiscal_year, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA budget units failed: {exc}")
 
@@ -278,7 +320,7 @@ async def nycha_budget_records(fiscal_year: Optional[int] = None, q: Optional[st
     limit = max(1, min(limit, 200))
     key = f"nycha:budget:rec:{fiscal_year}:{q}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _query_budget_records(fiscal_year, q, sort, order, page, limit))
+        return await _cached_async(key, lambda: _query_budget_records(fiscal_year, q, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA budget records failed: {exc}")
 
@@ -289,7 +331,7 @@ async def nycha_budget_records_export(fiscal_year: Optional[int] = None, q: Opti
     if not _available("nycha_budget"):
         raise HTTPException(status_code=404, detail="NYCHA budget not available")
     try:
-        d = _query_budget_records(fiscal_year, q, sort, order, 1, 50000)
+        d = await to_duckdb_thread(_query_budget_records, fiscal_year, q, sort, order, 1, 50000)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA budget export failed: {exc}")
     buf = io.StringIO(); w = csv.writer(buf); w.writerow(_BUDGET_REC_COLS)
@@ -419,7 +461,7 @@ async def nycha_revenue_summary():
     if not _available("nycha_revenue"):
         return _REVENUE_EMPTY
     try:
-        return _cached("nycha:revenue:summary", _query_revenue_summary)
+        return await _cached_async("nycha:revenue:summary", _query_revenue_summary)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA revenue summary failed: {exc}")
 
@@ -432,7 +474,7 @@ async def nycha_revenue_sources(fiscal_year: Optional[int] = None, sort: str = "
     limit = max(1, min(limit, 200))
     key = f"nycha:revenue:sources:{fiscal_year}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _query_revenue_sources(fiscal_year, sort, order, page, limit))
+        return await _cached_async(key, lambda: _query_revenue_sources(fiscal_year, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA revenue sources failed: {exc}")
 
@@ -498,7 +540,7 @@ async def nycha_revenue_records(fiscal_year: Optional[int] = None, q: Optional[s
     limit = max(1, min(limit, 200))
     key = f"nycha:revenue:rec:{fiscal_year}:{q}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _query_revenue_records(fiscal_year, q, sort, order, page, limit))
+        return await _cached_async(key, lambda: _query_revenue_records(fiscal_year, q, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA revenue records failed: {exc}")
 
@@ -509,7 +551,7 @@ async def nycha_revenue_records_export(fiscal_year: Optional[int] = None, q: Opt
     if not _available("nycha_revenue"):
         raise HTTPException(status_code=404, detail="NYCHA revenue not available")
     try:
-        d = _query_revenue_records(fiscal_year, q, sort, order, 1, 50000)
+        d = await to_duckdb_thread(_query_revenue_records, fiscal_year, q, sort, order, 1, 50000)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA revenue export failed: {exc}")
     buf = io.StringIO(); w = csv.writer(buf); w.writerow(_REV_REC_COLS)
@@ -614,7 +656,7 @@ async def nycha_contracts_summary():
     if not _available("nycha_contracts"):
         return _CONTRACTS_EMPTY
     try:
-        return _cached("nycha:contracts:summary", _query_contracts_summary)
+        return await _cached_async("nycha:contracts:summary", _query_contracts_summary)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA contracts summary failed: {exc}")
 
@@ -628,7 +670,7 @@ async def nycha_contracts(fiscal_year: Optional[int] = None, q: Optional[str] = 
     limit = max(1, min(limit, 200))
     key = f"nycha:contracts:{fiscal_year}:{q}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _query_contracts_list(fiscal_year, q, sort, order, page, limit))
+        return await _cached_async(key, lambda: _query_contracts_list(fiscal_year, q, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA contracts failed: {exc}")
 
@@ -674,7 +716,7 @@ async def nycha_contracts_export(fiscal_year: Optional[int] = None, q: Optional[
     if not _available("nycha_contracts"):
         raise HTTPException(status_code=404, detail="NYCHA contracts not available")
     try:
-        csv_text, n = _query_contracts_export(fiscal_year, q, sort, order)
+        csv_text, n = await to_duckdb_thread(_query_contracts_export, fiscal_year, q, sort, order)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA contracts export failed: {exc}")
     return Response(content=csv_text, media_type="text/csv", headers={
@@ -698,6 +740,67 @@ def _spending_glob(fiscal_year=None) -> str:
     base = _BASE.rstrip("/")
     fy = f"fiscal_year={int(fiscal_year)}" if fiscal_year else "fiscal_year=*"
     return f"'{base}/nycha_spending/{fy}/*.parquet'"
+
+
+_years_cache: dict = {"ts": 0.0, "val": None}
+
+
+def _spending_years() -> list:
+    """The fiscal-year partitions that ACTUALLY EXIST in the spending lake.
+
+    ⚠⚠ WITHOUT THIS AN OUT-OF-RANGE YEAR IS A 500. The spending lake is the only
+    NYCHA domain that is hive-PARTITIONED, so `read_parquet` on
+    `fiscal_year=2027/*.parquet` matches no files and DuckDB raises
+    `IO Error: No files found` — which the handlers turn into an HTTPException
+    plus a Sentry event. Measured 2026-08-26: `fiscal_year=2027` and
+    `fiscal_year=1999` both returned **HTTP 500** while 2025 returned 200, and a
+    crawler probing years produced DATABOOK-API-33/34. The budget / revenue /
+    contracts domains are single files, so an unknown year filters to zero rows
+    there — which is why only spending was ever affected.
+
+    Discovered by asking DuckDB for the distinct partition values rather than
+    listing a directory, so this keeps working when `_BASE` is an http(s) lake.
+    Cached like `_avail_cache` (same 300s), because it changes only when the
+    monthly refresh adds a partition.
+    """
+    now = time.time()
+    if _years_cache["val"] is not None and now - _years_cache["ts"] < 300:
+        return _years_cache["val"]
+    years: list = []
+    try:
+        con = _con()
+        rows = con.execute(
+            f"SELECT DISTINCT fiscal_year FROM read_parquet({_spending_glob()}, "
+            f"hive_partitioning=true) ORDER BY 1").fetchall()
+        con.close()
+        years = [int(r[0]) for r in rows if r[0] is not None]
+    except Exception as exc:  # noqa: BLE001
+        # ⚠ Degrade OPEN, never closed: an empty list here would make every year
+        # look nonexistent and empty the explorer. On failure the caller falls
+        # through to its previous behaviour (a real query, which may itself fail
+        # loudly) rather than silently serving "no data for that year".
+        logger.warning("[nycha] spending partition list unavailable: %s", exc_str(exc))
+        return []
+    _years_cache["val"], _years_cache["ts"] = years, now
+    return years
+
+
+def _spending_fy_missing(fiscal_year) -> bool:
+    """True when the caller named a year the lake has no partition for.
+
+    ⚠ A POSITIVE test against the discovered list, and it answers False when the
+    list could not be read — see `_spending_years`. `None` (meaning "all years")
+    is never missing.
+    """
+    if fiscal_year is None:
+        return False
+    years = _spending_years()
+    if not years:
+        return False
+    try:
+        return int(fiscal_year) not in years
+    except (TypeError, ValueError):
+        return True
 
 
 def _spending_available() -> bool:
@@ -806,7 +909,7 @@ async def nycha_spending_summary():
     if not _spending_available():
         return _SPENDING_EMPTY
     try:
-        return _cached("nycha:spending:summary", _query_spending_summary)
+        return await _cached_async("nycha:spending:summary", _query_spending_summary)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA spending summary failed: {exc}")
 
@@ -816,10 +919,16 @@ async def nycha_spending_by_development(fiscal_year: Optional[int] = None, sort:
                                         order: str = "desc", page: int = 1, limit: int = 50):
     if not _spending_available():
         return {"available": False, "data": [], "total": 0, "page": 1, "pages": 1}
+    # ⚠ `available: True` with no rows, NOT a 500 and NOT `available: False` — the
+    # lake is fine, that year simply has no partition. `fiscal_years` is served so
+    # a consumer can tell "no data for 2027" from "we are broken".
+    if _spending_fy_missing(fiscal_year):
+        return {"available": True, "data": [], "total": 0, "page": 1, "pages": 1,
+                "fiscal_year": int(fiscal_year), "fiscal_years": _spending_years()}
     limit = max(1, min(limit, 200))
     key = f"nycha:spending:dev:{fiscal_year}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _query_spending_by_development(fiscal_year, sort, order, page, limit))
+        return await _cached_async(key, lambda: _query_spending_by_development(fiscal_year, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA spending by-development failed: {exc}")
 
@@ -886,10 +995,14 @@ async def nycha_spending_records(fiscal_year: Optional[int] = None, q: Optional[
                                  page: int = 1, limit: int = 25):
     if not _spending_available():
         return {"available": False, "data": [], "total": 0, "page": 1, "pages": 1}
+    # See _spending_years: an unknown partition is an empty result, not a 500.
+    if _spending_fy_missing(fiscal_year):
+        return {"available": True, "data": [], "total": 0, "page": 1, "pages": 1,
+                "fiscal_year": int(fiscal_year), "fiscal_years": _spending_years()}
     limit = max(1, min(limit, 200))
     key = f"nycha:spend:rec:{fiscal_year}:{q}:{spending_category}:{section_8}:{sort}:{order}:{page}:{limit}"
     try:
-        return _cached(key, lambda: _query_spending_records(fiscal_year, q, spending_category, section_8, sort, order, page, limit))
+        return await _cached_async(key, lambda: _query_spending_records(fiscal_year, q, spending_category, section_8, sort, order, page, limit))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"NYCHA spending records failed: {exc}")
 
@@ -907,10 +1020,16 @@ async def nycha_spending_records_export(fiscal_year: Optional[int] = None, q: Op
                                         sort: str = "amount", order: str = "desc"):
     if not _spending_available():
         raise HTTPException(status_code=404, detail="NYCHA spending not available")
-    try:
-        d = _query_spending_records(fiscal_year, q, spending_category, section_8, sort, order, 1, _SPEND_EXPORT_CAP)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"NYCHA spending export failed: {exc}")
+    # An unknown partition exports a header-only CSV rather than 500ing — see
+    # _spending_years. The row count is in X-Row-Count either way.
+    if _spending_fy_missing(fiscal_year):
+        d = {"data": []}
+    else:
+        try:
+            d = await to_duckdb_thread(_query_spending_records, fiscal_year, q,
+                                       spending_category, section_8, sort, order, 1, _SPEND_EXPORT_CAP)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"NYCHA spending export failed: {exc_str(exc)}")
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(_SPEND_EXPORT_COLS)

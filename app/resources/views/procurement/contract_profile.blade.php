@@ -317,6 +317,69 @@
 
                 @include('procurement.partials.related_notices')
 
+                {{-- The curated program this contract is part of. Sits ABOVE
+                     Related Contracts deliberately: this is a reviewed
+                     judgement, and the block below is a prompt to look. --}}
+                @php
+                    $pg = $program ?? null;
+                    $pgMembers = $pg['members'] ?? [];
+                    // Precomputed: a Blade directive glued to a word character
+                    // is not compiled, and php -l cannot see that.
+                    $pgMoney = function ($v) {
+                        $v = (float) $v;
+                        if ($v >= 1000000) return '$' . number_format($v / 1000000, 1) . 'M';
+                        if ($v >= 1000) return '$' . number_format($v / 1000, 0) . 'K';
+                        return '$' . number_format($v, 0);
+                    };
+                @endphp
+                @if($pg && count($pgMembers))
+                <div id="program" class="db-anchor mb-5">
+                    <div class="d-flex align-items-center mb-3" style="gap: var(--db-space-15);">
+                        <h4 class="mb-0">Part of the {{ $pg['name'] }} program</h4>
+                        <span class="db-badge db-badge-neutral">{{ $pg['contracts'] }}</span>
+                    </div>
+                    <p class="text-muted small mb-2">
+                        <strong>{{ $pg['contracts'] }} contracts, {{ $pg['vendors'] }} vendors,
+                        {{ $pg['agencies'] }} {{ $pg['agencies'] == 1 ? 'agency' : 'agencies' }},
+                        {{ $pgMoney($pg['value']) }} committed.</strong>
+                        @if(($pg['ceiling'] ?? 0) > 0)
+                            A further {{ $pgMoney($pg['ceiling']) }} is master-agreement
+                            <em>ceiling</em> that agencies may buy against, which is
+                            not spend and is not added to the figure above.
+                        @endif
+                        Membership is reviewed by hand, contract by contract, and is
+                        not inferred from a shared end date or a matching title.
+                    </p>
+                    @if(!empty($pg['note']))
+                    <p class="text-muted small mb-2">{{ $pg['note'] }}</p>
+                    @endif
+                    <div class="db-table-wrap"><div class="table-responsive">
+                    <table class="db-table">
+                        <thead><tr><th>Contract</th><th>Vendor</th><th>Title</th><th class="text-end">Value</th><th>Ends</th></tr></thead>
+                        <tbody>
+                        @foreach($pgMembers as $m)
+                            <tr>
+                                <td>
+                                    @if($m['contract_id'] === ($contract['contract_id'] ?? null))
+                                        <strong>{{ $m['contract_id'] }}</strong>
+                                    @else
+                                        <a href="/procurement/contract/{{ $m['ctr_id'] }}">{{ $m['contract_id'] }}</a>
+                                    @endif
+                                </td>
+                                <td>{{ \Illuminate\Support\Str::limit($m['vendor'] ?? '', 28) }}</td>
+                                <td>{{ \Illuminate\Support\Str::limit($m['title'] ?? '', 48) }}</td>
+                                <td class="text-end">
+                                    {{ $pgMoney($m['value'] ?? 0) }}@if(!empty($m['is_master']))<span class="text-muted small"> ceiling</span>@endif
+                                </td>
+                                <td>{{ $m['end_date'] ?? '' }}</td>
+                            </tr>
+                        @endforeach
+                        </tbody>
+                    </table>
+                    </div></div>
+                </div>
+                @endif
+
                 {{-- Other contracts worth seeing from here. Two kinds, kept apart. --}}
                 @php
                     $rcSame = $relatedContracts['same_vendor'] ?? [];

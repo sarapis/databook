@@ -19,3 +19,126 @@ contract_id,tech_relevant,function_category,note
 "CT1-816-20258800203","0","","The same Mental Health Association crisis-line relationship under a later amendment, filed as Case management. Excluded for the same reason as its sibling; together the two rows put $210.9M of clinical service into the technology universe."
 "CT1-057-20238805244","","ERP/financials","Ambulance invoicing, dunning and litigation for FDNY — outsourced revenue-cycle management (commodity: Accounting, Auditing and Budgeting). It is financial back-office operations with software attached, not payment processing: filing it under Payments conflated collecting EMS revenue with taking payments from the public."
 "CT1-806-20248804455","0","","⚠ ARGUABLE — flagged for the owner. Prepaid Immediate Response Cards for families in HPD care, procured as an Emergency. The substance is distributing financial assistance to households; MoCaFi is a fintech, but what the City buys is benefit delivery and card logistics. Excluded on the same reasoning as the JP Morgan card program."
+#
+# ───────── SEGMENT REVIEW: Data/analytics, 2026-09-15 ─────────
+# Top 30 of the segment = 78.7% of its $209.0M. Worksheet:
+# docs/contract-review-worksheet-data-analytics.csv (15 ok / 3 not-tech /
+# 1 wrong-function / 11 unsure-and-left-as-found).
+#
+# ⚠⚠ WHY A SECOND PASS WAS NEEDED AT ALL. The 2026-08-12 gate is the top 30
+# BY VALUE across the whole non-licence universe, and measured 2026-09-15 it
+# draws 0 rows from 8 of the 14 segments. Data/analytics is one of them —
+# correcting its top two rows took it $2,137M -> $209.0M and therefore out of
+# the global top 30, so the residue inside it became unreachable by the gate
+# that found the first error. Use --segment to review within a segment.
+"CT1-057-20151408147","","ERP/financials","FDNY ambulance invoicing, dunning and litigation, 2015-02-01 to 2023-01-31. Its immediate successor CT1-057-20238805244 (Digitech, 2023-02-01 to 2030-01-31, same agency, same service) was moved to ERP/financials by the 2026-08-12 top-30 pass as 'outsourced revenue-cycle management ... financial back-office operations with software attached'. Identical service, identical reasoning; this row survived only because $16.0M sits far below a top-30-by-value cut on a $10.6B universe. Filed as Data/analytics it was the second-largest row in that segment."
+"CT1-816-20248806567","0","","⚠ THE CLASSIFIER'S OWN RATIONALE REFUTES ITS FLAG: 'the core service is physical laboratory diagnostic testing'. Disease diagnostic testing in skilled nursing facilities for DOHMH. Reporting results over a secure network does not make clinical lab work a technology purchase. §5a of the section plan predicted this residue by name."
+"CT1-816-20258802048","0","","DOHMH laboratory tests. Same shape and same words from the classifier as CT1-816-20248806567: 'the core service is physical laboratory testing which cannot be replaced by software.'"
+"CT1-816-20238804353","0","","DOHMH teleradiology — chest x-ray interpretation. The classifier: 'requires licensed medical professionals rather than a software build.' Same reading as the NYC Well crisis-line rows above: a service delivered through technology is not a technology purchase."
+"CT1-816-20248802771","0","","⭐ FOUND BY SCANNING FOR THE PATTERN, NOT THE SEGMENT — and it is in Staffing/consulting, so neither the global top-30 gate nor the Data/analytics sheet could surface it. DOHMH nurse triage telephone line, $25.13M, the largest single correction in this pass. The classifier: 'This is a human-staffed call center service, not a software product.' That is the third and fourth DOHMH clinical-service exclusion in this seed after the two crisis-line rows, which is why it is recorded as a pattern rather than an incident. ⚠ The vendor is CHANGE HEALTHCARE TECHNOLOGY ENABLED SERVICES LLC — the same 'TECHNOLOGY' token family that made the retired vendor_tags heuristic admit Inter-Con SECURITY SYSTEMS. Whether the name drove the flag is not determinable from our data; that it survived the derived scope is."
+#
+# ───────── SEGMENT REVIEWS: Hardware/infrastructure + Telecom/network, 2026-09-15 ─────────
+# Top 30 each = 94.4% and 96.2% of their value (both are CONCENTRATED, unlike
+# Staffing/consulting where 30 rows reach only 49.7% — size the cut per segment).
+# Hardware: 28 ok / 1 unsure / 1 not-tech.  Telecom: 30 ok, nothing to correct.
+# Worksheets: docs/contract-review-worksheet-{hardware-infrastructure,telecom-network}.csv
+"CT1-826-20248801976","0","","⭐ A SIBLING OF AN ALREADY-CURATED DECISION, found by scanning for the PATTERN rather than the row. DEP combined-sewer-overflow construction at the Bronx River, $45.68M. Identical on EVERY recorded dimension to CT1-826-20258801735 (Skanska ECCO III), excluded as not-tech by the 2026-08-12 pass: same agency, same 'Construction Change Order' procurement method, same 'Water and Wastewater Treatment Services' commodity, and the same self-refuting rationale — 'while it includes SCADA controls, the contract is primarily for large-scale civil engineering and tunnel construction'. Embedded SCADA does not make a sewer tunnel a technology purchase. ⚠ It survived the first pass only because $45.7M sits far below a top-30-by-value cut on a $10.6B universe — the same reason the FDNY ambulance-billing sibling above survived."
+#
+# ───────── THE BANK CARD / BANKING BOUNDARY, 2026-09-15 (owner decision) ─────────
+# ⚠⚠ THE 2026-08-12 PASS EXCLUDED JP MORGAN'S $464.0M PROCUREMENT-CARD PROGRAMME
+# as "a BANKING FACILITY with a reporting portal, not a technology system", and
+# marked itself "⚠ ARGUABLE — flagged for the owner". It stayed arguable for a
+# month while its direct siblings sat inside the universe. Put to the owner
+# 2026-09-15 with the figures measured, and the call is: EXCLUDE THEM TOO.
+#
+# ⭐ AND THE PART THAT WAS NEVER ARGUABLE IS WHAT MADE IT DECIDABLE: our own data
+# already answered the same question both ways. `scan_classifier_contradictions.py`
+# found WEX BANK's fuel card classified tech at $21.1M and NON-TECH on the two
+# OGS instruments of the identical programme ($2.5M each), and Bank of America's
+# General Banking Services tech at $6.9M against non-tech at $2.1M from the same
+# vendor at the same agency. One of each pair was wrong wherever the line fell.
+#
+# ⚠ FIRST DATA IS DELIBERATELY NOT HERE. `CardHolder Present and Not-Present
+# Merchant Card & ECP` ($122.6M) is merchant payment PROCESSING, not a bank
+# facility the City draws on — a different question that was not put to the
+# owner. Its own $2.0M/$9.1M self-contradiction is recorded in the worksheet and
+# left open rather than settled by implication.
+"MA1-857-20211202057","0","","DCAS procurement card, U S Bank, $49.0M. A commercial card facility issued by a bank, ridden off NY State OGS — the same instrument as the JP Morgan programme already excluded, from the same agency, differing only in the issuing bank. Counting it as technology puts commercial card issuance into 'how NYC buys technology'."
+"MA1-857-20228802327","0","","DCAS P-Card services, U S Bank, $49.0M. The successor instrument to MA1-857-20211202057 and excluded for the same reason; the classifier's own rationale calls it 'complex financial infrastructure and banking integration', which is the argument for excluding it rather than for admitting it."
+"MA1-857-20268800881","0","","DCAS fuel card services, WEX Bank, $21.1M. ⭐ THE CLASSIFIER ITSELF ALREADY ANSWERED THIS BOTH WAYS: the two OGS instruments of the identical programme (MA1-857-20228806162 and 20211201861, $2.5M each, same agency, same vendor) are flagged NON-TECH. A fleet fuel card is a payment facility with reporting attached; the non-tech reading is the one its own siblings carry."
+"CT1-836-20268803943","0","","DOF general banking services, Bank of America, $6.9M. ⭐ MEASURED: of the TEN contracts titled '...banking services...', this is the ONLY one flagged tech — including its own near-identical sibling CT1-836-20248802706 ('General Banking Services BOA NAE', $2.1M, same vendor, same agency) which is non-tech. It is the outlier, not the rule, and the JP Morgan reasoning applies to a general banking facility even more directly than to a card programme."
+#
+# ───────── INTERPRETATION SERVICES + FIRST DATA, 2026-09-15 (owner decisions) ─────────
+# ⚠⚠ THE INTERPRETATION BOUNDARY WAS ALREADY DRAWN — BY THE CLASSIFIER, 98 TIMES.
+# Measured across every interpretation/translation contract in the corpus: 103
+# contracts from ~20 vendors across ~25 agencies, of which **98 are already
+# non-tech ($122.62M)** and 5 were inside the universe ($24.84M). This is not a
+# new line; it is five rows on the wrong side of a line the data already holds.
+#
+# ⭐ AND TWO OF THE FIVE WERE STRAIGHT SELF-CONTRADICTIONS. DCAS ran ONE telephonic
+# interpretation procurement with a PRIMARY and a SECONDARY award: Language Line
+# (MA1-857-20248807152, $18.57M) is non-tech and Lionbridge
+# (MA1-857-20248807367, $18.66M) was tech. Same agency, same procurement, same
+# service, near-identical value, opposite answers. TotalCaption's two CART
+# contracts split the same way (CT1-002-20248801342 out, CT1-002-20238801750 in).
+# ⚠⚠ `scan_classifier_contradictions.py` CANNOT SEE THIS, and that is a real limit
+# of the instrument rather than an oversight: it groups on (agency, vendor, title),
+# so a MULTI-AWARD PANEL where different vendors deliver the identical service is
+# structurally invisible to it. Found by reading the population, not by the scan.
+#
+# ⚠ TWO OF THE FIVE ARE KEPT, DELIBERATELY. CT1-017-20228803578 (Kyndryl, $0.18M)
+# buys TABLETS with video-relay software — hardware procurement that happens to
+# serve interpretation. CT1-858-20248808352 (Gazelle, $0.99M) is translation OF A
+# WEB PLATFORM (MyCity Business site). Neither is the purchase of human
+# interpretation, which is what the other 98 are.
+"MA1-857-20248807367","0","","DCAS telephonic interpretation, SECONDARY award, Lionbridge, $18.66M. The PRIMARY award of the same procurement (Language Line, MA1-857-20248807152, $18.57M) is already non-tech, so the two halves of one panel disagreed. The classifier's own rationale is the argument for excluding it: 'While the platform is tech-enabled, the core service is human interpretation which cannot be replaced by software alone.' Same reading as the DOHMH clinical rows above — a service delivered through technology is not a technology purchase."
+"CT1-056-20238806224","0","","NYPD telephonic interpretation, Language Line, $4.90M. The SAME VENDOR's citywide DCAS contracts are non-tech; this one survived only because it sat under a different agency. The classifier: 'Language interpretation services are a specialized human-centric service, not a software product that can be built.'"
+"CT1-002-20238801750","0","","Mayoralty CART (Communication Access Real-time Translation), TotalCaption, $0.10M. Its own sibling CT1-002-20248801342, same vendor, same agency, same service, is already non-tech. Real-time human transcription for accessibility; the classifier concedes it 'involves specialized human transcription'."
+#
+# ⚠ FIRST DATA IS TWO BUSINESSES UNDER ONE NAME, and only one of them was ever in
+# question. First Data GOVERNMENT SOLUTIONS runs DoITT's Citywide IT Quality
+# Control (2 x $10.0M) — plainly technology, untouched. First Data MERCHANT
+# SERVICES runs DOF card acceptance. ⭐ OWNER DECISION: merchant processing STAYS
+# IN. It is the City ACCEPTING payments through an integrated system, not drawing
+# on a bank facility the way the excluded P-Card and fuel-card programmes are —
+# a different question from the one settled above, and answered differently.
+# So the only thing to fix here is the contradiction: two identically-titled
+# amendments of the same relationship were answered opposite ways.
+"CT1-836-20201429511","1","Payments","DOF merchant card processing, First Data Merchant Services, $9.15M. Flipped INTO the universe, not out of it: it is titled 'First Data Amendment #1' exactly like CT1-836-20201420327 ($1.96M), same vendor and agency, which is tech/Payments — and the $122.57M parent contract (CT1-836-20238802315) is tech/Payments too. It was the odd one out. ⚠ This is the one correction in this seed that ADDS to the technology universe; the boundary itself is unchanged."
+"CT1-056-20211407576","0","","NYPD telephonic interpretation, Language Line, $0.50M, 09/2020-08/2022. ⭐ THE ODD YEAR OUT OF ONE CONSECUTIVE RUN: its DIRECT SUCCESSOR at the same agency, CT1-056-20238806224 ('Language Line Renewal #2', 09/2022-08/2025), is already excluded in this seed. Same vendor, same agency, same service, consecutive terms, and the title is the same stem. ⚠ MEASURED over the whole corpus: of 26 Language Line rows across 9 agencies this is the ONLY one flagged tech — the outlier, not the rule, exactly like the Bank of America banking row above. The classifier's own rationale is the argument for excluding it: 'Language translation services are a specialized service that cannot be replaced by simple software.' ⚠⚠ IT SURVIVED THE INTERPRETATION SWEEP BECAUSE ITS TITLE NAMES THE VENDOR'S BRAND, NOT THE SERVICE — a title-word predicate on (interpret|translat) cannot see 'Language Line Renewal Amendment #1', and the contradiction scanner could not group it either because its sibling's title reads differently. Found by asking the mechanical question instead: which tech-flagged rows share a vendor and agency with an already-curated exclusion?"
+"CT1-002-20228802334","0","","CART (Communication Access Real-time Translation), TotalCaption, $0.10M, FY22. ⭐ THE FIRST OF THREE CONSECUTIVE FISCAL YEARS OF ONE SERVICE at agency code 002, all at $99,999: FY22 (this row, tech), FY23 CT1-002-20238801750 (already excluded in this seed), FY24-25 CT1-002-20248801342 (non-tech). The owner excluded the MIDDLE year; this is the first. Real-time human transcription for accessibility, and the classifier concedes it 'involves specialized human labor'. ⚠⚠ TWO INDEPENDENT PARTS OF THE SCAN'S KEY DIFFER AND BOTH ARE COSMETIC: the title carries the vendor's own name plus a fiscal-year prefix ('FY22 TotalCaption LLC Renewal #1') where its siblings name the service, and `agency` reads 'OFFICE OF CRIMINAL JUSTICE (002)' where theirs read 'MAYORALTY'. ⚠ Do NOT 'fix' that by keying the scan on the agency CODE: measured, only codes 002 and 816 fan out to several agency strings and in both cases those are genuinely different bodies (002 covers six Mayoral offices; 816 covers DOHMH and OCME), so collapsing on the code would fuse organisations — the `801` defect the capital spine already records."
+#
+# ── 2026-09-18: the contradiction scan's remaining 16 groups, triaged ─────────
+# `scan_classifier_contradictions.py` finds programmes classified BOTH ways —
+# same vendor, same agency, same normalised title — so ONE side is wrong
+# whatever the boundary is. 16 groups / $3.4M still flagged tech.
+#
+# ⭐ NINE OF THEM NEEDED NO NEW BOUNDARY, BECAUSE THE CLASSIFIER'S OWN RATIONALE
+# REFUTES ITS OWN FLAG — the pattern this file already records on the $850.7M
+# wastewater row. Read the pairs below: the tech-flagged row says "rather than a
+# software product", "human services", "service-heavy", or reasons about
+# REPLACEABILITY ("could be built using an open-source LMS") instead of about
+# what was bought, while its non-tech sibling states plainly what it is.
+# ⚠ REPLACEABILITY IS A DIFFERENT QUESTION LEAKING INTO `tech_relevant`. "This
+#   could be replaced by software" is an argument about a substitute, not about
+#   whether the City bought technology. It appears in four of these nine.
+#
+# ⚠ SEVEN GROUPS ARE LEFT UNRESOLVED ON PURPOSE and are NOT rows here — they are
+#   genuine boundary questions, not self-contradictions, and together they carry
+#   under $0.3M: physical equipment and consumables (Konica printers/copiers
+#   @ DFTA, HP ink cartridges @ Parks, electronic components @ Parks), content
+#   subscriptions (Politico @ DCAS, APT member exchange @ DoITT), one pair whose
+#   two rationales describe different things (WESTPRIME @ DOHMH: "system
+#   maintenance" against "tuberculosis control"), and physical security systems
+#   (SECUREWATCH24 @ OATH). Each needs a line drawn, not an error corrected.
+#
+"CT1-856-20228800812","0","","New Horizons Learning, ""Technology Skills Training"" @ DCAS, $1.2M — the largest of the contradictions. The tech-flagged row's rationale argues REPLACEABILITY (""could be partially replaced by internal knowledge management or modern e-learning platforms""); its sibling states the thing itself — ""a professional training service, not a technology product"". Teaching people to use technology is a human service delivered by instructors, the same reading that excluded the DOHMH clinical services and the nurse-triage line."
+"CT1-260-20238808911","0","","Renaissance Technical Institute @ DYCD, $0.6M. ⚠ THE FLAG IS REFUTED BY ITS OWN SENTENCE: ""a discretionary grant for a technical institute, which provides vocational training services RATHER THAN A SOFTWARE PRODUCT."" A DYCD 260 Discretionary Contract is youth programme funding. ⚠ Its title is a FORM NAME shared by 999 vendors, so the grouping is weak — but the rationale settles it without the grouping."
+"CT1-260-20228802932","0","","Per Scholas @ DYCD, $0.3M. Same self-refutation, more explicit: ""Per Scholas provides IT workforce training and education services, WHICH ARE HUMAN SERVICES rather than a software product."" Three sibling rows at the same vendor and agency are already non-tech."
+"CT1-068-20258804157","0","","Bennett Midland, ""Analytic Technical Assistance - Service Area 2"" @ ACS, $0.3M. A management-consulting engagement for child-services programme design; the identically-titled sibling is classified ""a human services contract for consulting/support services"". ⚠ ""Technical assistance"" in a human-services agency is a term of art for programme support, not IT."
+"CT1-017-20228804224","0","","MYCA Multimedia, ""Custom Learning and Development Solution"" @ OEM, $0.2M. Replaceability reasoning again — ""can often be built using modern open-source LMS platforms"" — against a sibling that says ""learning and development solutions are professional training services""."
+"CT1-820-20200003665","0","","FEDCAP Rehabilitation Services @ OATH, $0.2M. The rationale calls it ""an IT-related staffing or consulting contract, which could potentially be replaced by internal staff""; FEDCAP is a vocational-rehabilitation nonprofit and the sibling reads ""a standard services contract for community service"". ⚠ This vendor already appears in this repo's notes as the one whose legal-form suffix stripped to the bare key ""inc""."
+"CT1-017-20248803821","0","","NYS Technology Enterprise Corp, ""Interagency Communications Committee Support"" @ OEM, $0.1M. ⚠ A TECHNOLOGY VENDOR DOING NON-TECHNOLOGY WORK, which is exactly why the retired vendor-name tag was wrong: the rationale says ""a service-heavy contract that relies on external expertise RATHER THAN A SPECIFIC SOFTWARE PRODUCT"", and the sibling calls it ""professional support services for committee meetings and policy assessment""."
+"CT1-836-20258804829","0","","NYS Industries for the Disabled, scanning of City Register record books @ DOF, $0.1M. Both rows agree on the facts and only the flag differs: ""digitization of physical records is a SERVICE-HEAVY task"" against ""a physical document scanning and digitization service, NOT A SOFTWARE PRODUCT"". NYSID is a sheltered-employment programme; the labour is the purchase."
+"CT1-260-20228806715","0","","New York Web Center @ DYCD, $0.0M. ⚠⚠ THE FLAG CAME FROM THE VENDOR'S NAME AND SAYS SO: ""THE VENDOR NAME SUGGESTS web services"". Its siblings answer it directly — ""DESPITE THE VENDOR NAME, this is a discretionary human services grant, not a technology contract"". This is the defect that retired `vendor_tags.digital_services` (Inter-Con SECURITY SYSTEMS), reappearing one classifier down."
+"CT1-260-20228802500","0","","New York Web Center @ DYCD, $0.0M — the second of the two name-driven rows; see the note above. Same title, same agency, same vendor, and two of the four rows in the group were already non-tech."

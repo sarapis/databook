@@ -1,0 +1,60 @@
+# Who MAKES each product family, hand-curated.
+#
+# ⚠⚠ ONLY CURATED ROWS RENDER, and there is no automatic tier here at all. Every
+# other claim on a family page is about a CONTRACT; this one is about a named
+# COMPANY, where being wrong is a different kind of wrong. A family with no row
+# here renders "Maker not yet identified", which is the honest state for 794 of
+# the 814 families today.
+#
+# ⚠⚠ SOURCES MUST BE STABLE URLs. The `verify_license_identities.py` pass cites
+# Google grounding redirects (vertexaisearch.cloud.google.com/...), and those
+# EXPIRE -- measured 2026-09-18, every one of them now returns 404. A citation
+# that dies is worse than none, because it reads as evidence. Cite the maker's
+# own canonical site, a regulator's filing, or a stable encyclopaedia entry.
+# ⚠ Two of these return 403 to an automated fetch (hexagon.com, gartner.com).
+# That is bot-blocking, not a missing page -- the documented www.nyc.gov case.
+#
+# ⚠⚠ `maker_vendor_id` IS LOOKED UP, NEVER GUESSED FROM A NAME. Verified against
+# the `vendors` table on 2026-09-18. Two things that lookup found:
+#   * substring matching would be a disaster here. `%HEXAGON%` returns HEXAGON
+#     CONSTRUCTION & ELECTRICAL GROUP INC and Hexagon Group Inc -- different
+#     companies sharing a word -- and `%BROADCOM%`/`%CA TECHNOLOG%` return
+#     WCA TECHNOLOGIES INC and Corsica Technologies LLC, which are neither.
+#   * most makers hold SEVERAL registrations (AT&T three, ConvergeOne three,
+#     LexisNexis four). The id here is the one whose registered name IS the
+#     maker's corporate name; where none is, the column is blank.
+# A BLANK maker_vendor_id is a finding, not a gap: Broadcom and Octave are not
+# registered City vendors at all, so every dollar reaches them through a
+# reseller. The card says so.
+#
+# maker_kind:
+#   company          - it makes the software
+#   service-provider - it sells a service delivered through software, so "who
+#                      makes the product" is the wrong question (the classifier's
+#                      own rationale already says this for Gartner and Summer)
+#   bundle           - somebody else's product, resold with the seller's own
+#                      service wrapped around it
+#
+# `why` is PUBLIC and renders on the page. Keep it about the company, never
+# about our figures -- the page computes those beside it.
+family,maker,maker_kind,maker_vendor_id,parent,formerly,hq,ticker,website,source_url,as_of,why
+Microsoft,Microsoft Corporation,company,1632138,,,"Redmond, Washington",MSFT,https://www.microsoft.com,https://www.microsoft.com/en-us/investor,2026-09-18,"Registered as a City vendor in its own right, but the enterprise agreement is bought through Dell Marketing -- which is why the City's payments to Microsoft do not add up to what it spends on Microsoft software."
+Axon,"Axon Enterprise, Inc.",company,1647619,,"TASER International, Inc.","Scottsdale, Arizona",AXON,https://www.axon.com,https://en.wikipedia.org/wiki/Axon_Enterprise,2026-09-18,"Renamed from TASER International in 2017 as body cameras and the Evidence.com platform overtook the weapons business. Sells the hardware and the evidence-management subscription together."
+Intergraph CAD,Octave,company,,,Intergraph Corporation; then Hexagon AB,"Stockholm, Sweden",,https://hexagon.com/products/intergraph-computer-aided-dispatch,https://hexagon.com/company/newsroom/press-releases/2025/octave-unveiledhexagon-reveals-name-for-potential-2026-company-spin-off,2026-09-18,"Three corporate owners for one product line: Intergraph Corporation was acquired by Hexagon AB, and in 2026 Hexagon spun its Safety, Infrastructure & Geospatial division out as Octave, an independent public company. The dispatch suite is now Octave I/CAD. ⚠ The City's contract is with Intergraph Corporation, two steps back; Octave itself is not a registered City vendor."
+NICE,NICE Ltd.,company,1654864,,,"Ra'anana, Israel",NICE,https://www.nice.com,https://www.nice.com/about-nice,2026-09-18,"Call-recording and contact-centre software. The same platform underneath the City's separately-contracted ConvergeOne call-centre service, which is built on NICE CXone."
+Casebuilder,"SoundThinking, Inc.",company,1654198,,"ShotSpotter, Inc.","Fremont, California",SSTI,https://www.soundthinking.com,https://www.soundthinking.com/investor-relations/,2026-09-18,"Same maker as the City's separately-contracted gunshot-detection system. Casebuilder is its investigation-management product, previously sold as CrimeCenter and ShotSpotter Investigate."
+SoundThinking (ShotSpotter),"SoundThinking, Inc.",company,1654198,,"ShotSpotter, Inc.","Fremont, California",SSTI,https://www.soundthinking.com,https://www.soundthinking.com/investor-relations/,2026-09-18,"Renamed from ShotSpotter in 2023 as the company broadened past gunshot detection. It also makes Casebuilder, which the City buys on a separate contract -- two families here, one vendor relationship."
+Summer,"Summer, PBC",service-provider,2024688,,,"New York, New York",,https://www.meetsummer.com,https://www.nyc.gov/site/dcas/news/008-25/mayor-adams-student-loan-benefits-company-summer-launch-partnership-help-wipe-out-estimated,2026-09-18,"A public benefit corporation selling student-loan repayment advice to employers, priced per participant. The City announced the partnership itself. Not a software licence: the platform is how the advice is delivered, not the thing bought."
+Geotab,Geotab Inc.,company,1942351,,,"Oakville, Ontario",,https://www.geotab.com,https://www.geotab.com/about/,2026-09-18,"Privately held Canadian telematics maker. Its platform is also what the City's separate AT&T Vehicle Tracking contract runs on, so two families here share one underlying product."
+Ivalua,Ivalua,company,1845404,,Directworks,"Redwood City, California",,https://www.ivalua.com,https://www.ivalua.com/company/about-us/,2026-09-18,"Source-to-pay procurement software. This is the platform behind PASSPort, the City's own procurement system -- so the data this analysis is built from passes through a product in it."
+ConvergeOne Call Center Solution,C1,service-provider,1872405,,ConvergeOne,"Bloomington, Minnesota",,https://www.onec1.com,https://www.onec1.com/about-us,2026-09-18,"Rebranded from ConvergeOne to C1 in 2023. It integrates and runs contact-centre systems rather than making one: the software underneath this contract is NICE CXone, which the City also buys directly."
+Itineris UMAX,Itineris NV,company,1880612,,,"Ghent, Belgium",,https://itineris.net,https://itineris.net/global/platform/,2026-09-18,"Belgian utility billing and customer-information software, sold as UMAX and built on Microsoft Dynamics 365 and Azure -- so a Microsoft platform sits underneath this contract as well."
+Citrix,"Cloud Software Group, Inc.",company,1763643,,"Citrix Systems, Inc.","Fort Lauderdale, Florida",,https://www.cloud.com,https://www.cloud.com/about,2026-09-18,"Citrix was taken private in 2022 and folded into Cloud Software Group alongside TIBCO. The City holds contracts under both the old and the new corporate name."
+Talkspace,Talkspace,service-provider,2001265,,,"New York, New York",TALK,https://www.talkspace.com,https://investors.talkspace.com/,2026-09-18,"Virtual behavioural health, listed on NASDAQ since 2021. ⚠ The City's contract is with Talkspace Medical Services NY PC, a professional corporation employing licensed clinicians -- which is the clearest evidence that what is bought here is therapists' time, not a software licence."
+LexisNexis,RELX,company,1647609,,Reed Elsevier,"London, United Kingdom",RELX,https://www.relx.com,https://www.relx.com/our-business/market-segments,2026-09-18,"One corporate group behind three of the City's vendors: RELX Inc, LexisNexis Risk Solutions and LexisNexis VitalChek. RELX runs LexisNexis Legal & Professional and LexisNexis Risk Solutions as separate divisions, which is why one relationship arrives on the books under several names."
+Cyclomedia,Cyclomedia Technology B.V.,company,1656606,,,"Zaltbommel, Netherlands",,https://www.cyclomedia.com,https://www.cyclomedia.com/en/about-us,2026-09-18,"Dutch street-level imagery company. It sells captured imagery as a subscription rather than a tool -- which is why this line is content the City buys, not software it runs."
+AssetWorks,AssetWorks LLC,company,1649691,Volaris Group (Constellation Software),,"Berwyn, Pennsylvania",,https://www.assetworks.com,https://www.assetworks.com/fleet/about-us/,2026-09-18,"Fleet and enterprise asset management software, owned by Volaris Group within Constellation Software -- an acquirer that buys and holds vertical-market software businesses, which is worth knowing when judging how a product's pricing and roadmap are likely to move."
+Gartner,"Gartner, Inc.",service-provider,1629347,,"Gartner Group, Inc.","Stamford, Connecticut",IT,https://www.gartner.com,https://www.gartner.com/en/about,2026-09-18,"Sells research subscriptions, Executive Programs and conference access to named users. Not a software maker: there is no product here to replace, which is why the lever on this line is the renewal date rather than a substitute."
+Broadcom (CA),Broadcom Inc.,company,,,CA Technologies,"Palo Alto, California",AVGO,https://www.broadcom.com,https://www.broadcom.com/company/about-us,2026-09-18,"Acquired CA Technologies in 2018 and has since raised enterprise software prices sharply across its acquisitions. ⚠ Broadcom is NOT a registered City vendor -- checked, and neither is CA Technologies -- so every dollar on this line reaches it through a reseller."
+AT&T Vehicle Tracking,Geotab Inc.,bundle,1942351,,,"Oakville, Ontario",,https://www.geotab.com,https://www.automotive-fleet.com/278900/att-integrates-geotab-tracking-platform-into-fleet-management-solution,2026-09-18,"⚠ AT&T Fleet Management is Geotab's platform, resold by AT&T with AT&T's own network connectivity wrapped around it. So this family and the City's separate Geotab contracts are the same underlying product bought two ways. The two are deliberately NOT merged -- that would assert a single product identity the contract data does not carry -- but a reader comparing them should know."
+Salesforce,"Salesforce, Inc.",company,1817190,,"Salesforce.com, Inc.","San Francisco, California",CRM,https://www.salesforce.com,https://investor.salesforce.com/,2026-09-18,"Registered as a City vendor, yet none of the contracts in this family are with it: they run through Carahsoft, MTX Group and a nonprofit. The licence figure here is therefore a floor, and the unregistered citywide purchasing agreement below is the reason."

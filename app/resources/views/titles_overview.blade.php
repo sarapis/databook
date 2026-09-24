@@ -65,6 +65,17 @@
 			<div class="db-hero-copy">
 				<div class="db-eyebrow" style="color:var(--db-accent);">Jobs &amp; Exams</div>
 				<h1>NYC Jobs Dashboard</h1>
+				<div class="db-alert db-alert-info mt-3">
+					<div class="db-alert-body">
+						<i class="bi bi-info-circle"></i> <strong>Scope:</strong> this is the City's
+						<strong>central careers portal</strong> only. Employers that run their own hiring
+						systems do not appear here &mdash; including the Department of Education, CUNY,
+						the Board of Elections, the City Council, the District Attorneys and the Borough
+						Presidents. So this is <strong>not a count of every City vacancy</strong>, and an
+						agency showing no openings may simply hire elsewhere.
+					</div>
+				</div>
+
 				<p>Current openings, civil-service exams, salaries, and hiring trends across New York City government — updated daily from official sources.</p>
 			</div>
 			<div class="db-hero-metric">

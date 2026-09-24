@@ -1,6 +1,7 @@
 <?php
 Namespace App\Custom;
 use Illuminate\Support\Str;
+use App\Custom\CapitalSlug;
 
 class Breadcrumbs
 {
@@ -128,7 +129,7 @@ class Breadcrumbs
 		return array_merge(self::$root, [
 				[route('capital'), 'Capital'], 
 				[route('prjTypes'), 'Project Types'],
-				[route('prjType', ['tslug' => Str::slug($tname, '-')]), $tname],
+				[route('prjType', ['tslug' => CapitalSlug::make($tname)]), $tname],
 			]);
 	}
 
@@ -145,7 +146,7 @@ class Breadcrumbs
 		return array_merge(self::$root, [
 				[route('capital'), 'Capital'],
 				[route('prjCategories'), 'Project Categories'],
-				[!empty($cname) ? route('prjStratCategory', ['cslug' => Str::slug($cname, '-')]) : '#', $cname ?: 'Category'],
+				[!empty($cname) ? route('prjStratCategory', ['cslug' => CapitalSlug::make($cname)]) : '#', $cname ?: 'Category'],
 			]);
 	}
 
@@ -177,7 +178,6 @@ class Breadcrumbs
 	#### archived projects — delegate to /projects/ breadcrumbs #####
 
 		static function capital_a() { return self::capital(); }
-		static function projects_a() { return self::projects(); }
 		static function prjTypes_a() { return self::prjTypes(); }
 		static function prjType_a($tname) { return self::prjType($tname); }
 		static function categories_a() { return self::categories(); }
